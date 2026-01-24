@@ -1,0 +1,144 @@
+{
+  "design_system": {
+    "identity": {
+      "name": "SourceControl_E1",
+      "archetype": "The Void Terminal",
+      "core_philosophy": "Tactical Minimalism. Every pixel is functional. The interface should feel like a modern IDE—fast, dark, and precise.",
+      "vibe": "Cyberpunk Utility",
+      "theme_strategy": "Dark Mode Only (Enforced)"
+    },
+    "typography": {
+      "font_family": {
+        "headings": "JetBrains Mono, monospace",
+        "body": "Inter, sans-serif",
+        "code": "JetBrains Mono, monospace"
+      },
+      "scale": {
+        "h1": "text-4xl font-bold tracking-tight",
+        "h2": "text-3xl font-semibold tracking-tight",
+        "h3": "text-2xl font-medium",
+        "body": "text-base leading-relaxed",
+        "small": "text-sm text-muted-foreground",
+        "tiny": "text-xs uppercase tracking-widest"
+      },
+      "rules": [
+        "Use JetBrains Mono for all headings, data values, and commit hashes.",
+        "Use Inter for long-form text, documentation, and labels.",
+        "Headings must never be centered unless in a specific 'Hero' context.",
+        "Use 'text-muted-foreground' for secondary information."
+      ]
+    },
+    "colors": {
+      "palette": {
+        "background": "#09090B",
+        "foreground": "#FAFAFA",
+        "card": "#18181B",
+        "card_foreground": "#FAFAFA",
+        "popover": "#09090B",
+        "popover_foreground": "#FAFAFA",
+        "primary": "#22C55E",
+        "primary_foreground": "#052e16",
+        "secondary": "#27272A",
+        "secondary_foreground": "#FAFAFA",
+        "muted": "#27272A",
+        "muted_foreground": "#A1A1AA",
+        "accent": "#27272A",
+        "accent_foreground": "#FAFAFA",
+        "destructive": "#EF4444",
+        "destructive_foreground": "#FAFAFA",
+        "border": "#27272A",
+        "input": "#27272A",
+        "ring": "#22C55E"
+      },
+      "semantic_usage": {
+        "success": "#22C55E (Green-500) - Use for 'Push Success', 'Online', 'Merged'",
+        "warning": "#F59E0B (Amber-500) - Use for 'Conflict', 'Pending', 'Staged'",
+        "error": "#EF4444 (Red-500) - Use for 'Failed', 'Error', 'Delete'",
+        "info": "#3B82F6 (Blue-500) - Use for 'Branch', 'Fetch', 'Pull'",
+        "git_graph": ["#F43F5E", "#8B5CF6", "#10B981", "#3B82F6", "#F59E0B"]
+      }
+    },
+    "layout": {
+      "spacing_scale": "p-1, p-2, p-4, p-6, p-8, p-12, p-16",
+      "container_padding": "px-6 py-8 md:px-12 md:py-12",
+      "grid_systems": {
+        "dashboard_overview": "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6",
+        "repo_list": "flex flex-col gap-4",
+        "detail_view": "grid grid-cols-1 lg:grid-cols-12 gap-8"
+      },
+      "rules": [
+        "Always use 'container mx-auto' for main page content wrappers.",
+        "Use 'gap-6' or 'gap-8' for dashboard grids to create breathing room.",
+        "Sidebar navigation should be fixed on the left (w-64) for desktop.",
+        "Use 'h-full' on cards to ensure equal height in grids."
+      ]
+    },
+    "components": {
+      "cards": {
+        "style": "bg-card border border-border rounded-lg shadow-none",
+        "hover": "hover:border-primary/50 transition-colors duration-300",
+        "content_padding": "p-6"
+      },
+      "buttons": {
+        "primary": "bg-primary text-primary-foreground hover:bg-primary/90 shadow-[0_0_10px_rgba(34,197,94,0.2)]",
+        "secondary": "bg-secondary text-secondary-foreground hover:bg-secondary/80",
+        "ghost": "hover:bg-accent hover:text-accent-foreground",
+        "destructive": "bg-destructive text-destructive-foreground hover:bg-destructive/90",
+        "shape": "rounded-md (Sharp but safe)",
+        "typography": "font-medium text-sm tracking-wide"
+      },
+      "inputs": {
+        "style": "bg-input/50 border-input focus:border-primary focus:ring-1 focus:ring-primary rounded-md font-mono text-sm"
+      },
+      "status_badges": {
+        "style": "inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
+        "variants": {
+          "success": "bg-green-500/10 text-green-500 hover:bg-green-500/20",
+          "warning": "bg-amber-500/10 text-amber-500 hover:bg-amber-500/20",
+          "error": "bg-red-500/10 text-red-500 hover:bg-red-500/20",
+          "neutral": "bg-zinc-500/10 text-zinc-400 hover:bg-zinc-500/20"
+        }
+      }
+    },
+    "visual_enhancers": {
+      "glassmorphism": "bg-background/80 backdrop-blur-md border-b border-border",
+      "gradients": "Use subtle radial gradients for 'active' states. Example: 'bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-primary/10 via-background to-background'",
+      "borders": "1px solid border-border. Use 'border-dashed' for dropzones or empty states.",
+      "shadows": "shadow-sm for cards, shadow-md for dropdowns. Avoid large diffuse shadows."
+    },
+    "motion": {
+      "transitions": "transition-all duration-200 ease-in-out",
+      "hover_effects": "translate-y-[-2px] for cards",
+      "loading": "Use skeleton loaders (animate-pulse) instead of spinners where possible."
+    },
+    "assets": {
+      "icons": "Lucide React (already installed). Use stroke-width={1.5} for a technical look.",
+      "images": {
+        "hero_bg": "https://images.unsplash.com/photo-1750020113720-70f9c87982e9?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODd8MHwxfHNlYXJjaHwzfHxhYnN0cmFjdCUyMGN5YmVyJTIwZ3JpZCUyMGRhcmslMjBiYWNrZ3JvdW5kfGVufDB8fHx8MTc2OTI2NjYyM3ww&ixlib=rb-4.1.0&q=85",
+        "server_status": "https://images.unsplash.com/photo-1680992046617-e2e35451bcdb?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzF8MHwxfHNlYXJjaHwxfHxzZXJ2ZXIlMjByb29tJTIwZGFyayUyMG5lb258ZW58MHx8fHwxNzY5MjY2NjI1fDA&ixlib=rb-4.1.0&q=85",
+        "hardware_config": "https://images.unsplash.com/photo-1614508569207-3295ac89d75f?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzF8MHwxfHNlYXJjaHw0fHxzZXJ2ZXIlMjByb29tJTIwZGFyayUyMG5lb258ZW58MHx8fHwxNzY5MjY2NjI2fDA&ixlib=rb-4.1.0&q=85"
+      }
+    },
+    "accessibility": {
+      "contrast": "Ensure text is at least 4.5:1 against background.",
+      "focus_states": "Visible ring-2 ring-primary ring-offset-2 ring-offset-background",
+      "aria": "All interactive elements must have aria-labels if no text is present."
+    },
+    "instructions_to_main_agent": {
+      "file_extensions": "Use .js and .jsx extensions. The project is NOT TypeScript.",
+      "component_location": "Place reusable UI components in /app/frontend/src/components/ui/",
+      "page_location": "Place page components in /app/frontend/src/pages/",
+      "routing": "Use react-router-dom for navigation.",
+      "state_management": "Use React Context or simple useState/useEffect for this MVP.",
+      "api_integration": "Use fetch or axios. Base URL should be configurable.",
+      "critical_rule": "DO NOT use 'transparent' backgrounds for headers/overlays. Use the glassmorphism utility defined above.",
+      "testing": "Add data-testid to all buttons, inputs, and links."
+    },
+    "universal_guidelines": {
+      "avoid_ai_slop": "Do not use generic centered layouts. Use the grid systems defined.",
+      "dark_mode_first": "Design for dark mode primarily. Light mode is secondary or non-existent for this tool.",
+      "micro_interactions": "Add hover states to EVERYTHING interactive.",
+      "toast_notifications": "Use 'sonner' for all notifications (success, error, loading)."
+    }
+  }
+}
