@@ -262,7 +262,10 @@ async def create_branch(repo_id: str, request: BranchCreateRequest, background_t
             git_repo.git.checkout(base_branch)
         else:
             # Try master if main doesn't exist
-            git_repo.git.checkout('master')
+            try:
+                git_repo.git.checkout('master')
+            except:
+                git_repo.git.checkout(git_repo.head.ref.name)
         
         # Create and checkout new branch
         new_branch = git_repo.create_head(request.branch_name)
@@ -275,10 +278,15 @@ async def create_branch(repo_id: str, request: BranchCreateRequest, background_t
             "message": f"Branch {request.branch_name} created successfully",
             "operation_id": op_obj.id
         }
+    except ValueError as e:
+        # User-friendly error messages
+        await update_operation_status(op_obj.id, "failed", str(e))
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error creating branch: {str(e)}")
-        await update_operation_status(op_obj.id, "failed", str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        error_msg = "Branch creation failed. Please check your credentials and repository access."
+        await update_operation_status(op_obj.id, "failed", error_msg)
+        raise HTTPException(status_code=500, detail=error_msg)
 
 @api_router.post("/repos/{repo_id}/push")
 async def push_to_branch(repo_id: str, request: PushRequest):
