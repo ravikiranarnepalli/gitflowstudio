@@ -106,6 +106,18 @@ class MergeRequest(BaseModel):
 class DeployRequest(BaseModel):
     branch_name: Optional[str] = None
 
+class TestConnectionRequest(BaseModel):
+    provider: str
+    url: str
+    auth_type: str
+    auth_data: Dict[str, Any]
+
+class TestFTPRequest(BaseModel):
+    host: str
+    username: str
+    password: str
+    use_tls: bool = False
+
 # ============= Repository Endpoints =============
 
 @api_router.get("/repos", response_model=List[Repository])
