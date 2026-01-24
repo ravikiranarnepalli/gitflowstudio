@@ -185,36 +185,52 @@ async def update_operation_status(op_id: str, status: str, message: str):
 
 # ============= Git Operations Logic =============
 
+def get_auth_url(url: str, provider: str, auth_type: str, auth_data: dict) -> str:
+    """Generate authenticated URL for Git operations"""
+    if auth_type == 'pat':
+        token = auth_data.get('token')
+        if not token:
+            raise ValueError("Access token is required for PAT authentication")
+        
+        if 'github.com' in url:
+            return url.replace('https://', f'https://{token}@')
+        elif 'gitlab.com' in url:
+            return url.replace('https://', f'https://oauth2:{token}@')
+        elif 'bitbucket.org' in url:
+            username = auth_data.get('username', 'x-token-auth')
+            return url.replace('https://', f'https://{username}:{token}@')
+        else:
+            return url.replace('https://', f'https://{token}@')
+    elif auth_type == 'ssh':
+        return url
+    else:
+        return url
+
 def get_git_repo(repo_data: dict):
     """Clone or open a git repository based on repo data"""
-    if repo_data.get('is_local'):
-        # Use /app directory for local codebase
-        return git.Repo('/app')
-    else:
-        # For external repos, clone to temp directory
-        temp_dir = tempfile.mkdtemp()
-        auth_type = repo_data.get('auth_type')
-        url = repo_data.get('url')
-        
-        if auth_type == 'pat':
-            token = repo_data['auth_data'].get('token')
-            # Inject token into URL
-            if 'github.com' in url:
-                auth_url = url.replace('https://', f'https://{token}@')
-            elif 'gitlab.com' in url:
-                auth_url = url.replace('https://', f'https://oauth2:{token}@')
-            elif 'bitbucket.org' in url:
-                username = repo_data['auth_data'].get('username', 'x-token-auth')
-                auth_url = url.replace('https://', f'https://{username}:{token}@')
-            else:
-                auth_url = url
-            
-            return git.Repo.clone_from(auth_url, temp_dir)
-        elif auth_type == 'ssh':
-            # For SSH, need to set up SSH keys (simplified for MVP)
-            return git.Repo.clone_from(url, temp_dir)
+    try:
+        if repo_data.get('is_local'):
+            # Use /app directory for local codebase
+            return git.Repo('/app')
         else:
-            return git.Repo.clone_from(url, temp_dir)
+            # For external repos, clone to temp directory
+            temp_dir = tempfile.mkdtemp()
+            auth_type = repo_data.get('auth_type')
+            url = repo_data.get('url')
+            provider = repo_data.get('provider')
+            
+            auth_url = get_auth_url(url, provider, auth_type, repo_data.get('auth_data', {}))
+            return git.Repo.clone_from(auth_url, temp_dir, depth=1)
+    except git.exc.GitCommandError as e:
+        error_msg = str(e)
+        if 'authentication failed' in error_msg.lower() or 'could not read' in error_msg.lower():
+            raise ValueError("Authentication failed. Please check your credentials (access token, username, or SSH key).")
+        elif 'repository not found' in error_msg.lower():
+            raise ValueError("Repository not found. Please verify the repository URL and your access permissions.")
+        elif 'could not resolve host' in error_msg.lower():
+            raise ValueError("Could not connect to Git server. Please check the repository URL.")
+        else:
+            raise ValueError(f"Git operation failed: {error_msg}")
 
 @api_router.post("/repos/{repo_id}/create-branch")
 async def create_branch(repo_id: str, request: BranchCreateRequest, background_tasks: BackgroundTasks):
