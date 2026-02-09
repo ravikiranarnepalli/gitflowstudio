@@ -69,7 +69,35 @@ const DeploymentConfig = () => {
       });
     } catch (error) {
       console.error('Error adding config:', error);
-      toast.error('Failed to add deployment config');
+      toast.error(error.response?.data?.detail || 'Failed to add deployment config');
+    }
+  };
+
+  const handleTestFTP = async () => {
+    if (!newConfig.config.host || !newConfig.config.username || !newConfig.config.password) {
+      toast.error('Please fill in all FTP credentials');
+      return;
+    }
+
+    setTestingFTP(true);
+    try {
+      const response = await axios.post(`${API}/test-ftp-connection`, {
+        host: newConfig.config.host,
+        username: newConfig.config.username,
+        password: newConfig.config.password,
+        use_tls: newConfig.config.use_tls
+      });
+
+      if (response.data.success) {
+        toast.success(response.data.message);
+      } else {
+        toast.error(response.data.message);
+      }
+    } catch (error) {
+      console.error('Error testing FTP:', error);
+      toast.error('FTP connection test failed');
+    } finally {
+      setTestingFTP(false);
     }
   };
 
