@@ -540,6 +540,31 @@ async def create_deployment_config(config_input: DeploymentConfigCreate):
     await db.deployment_configs.insert_one(doc)
     return config_obj
 
+@api_router.put("/deployment-configs/{config_id}", response_model=DeploymentConfig)
+async def update_deployment_config(config_id: str, config_input: DeploymentConfigCreate):
+    # Check if config exists
+    existing = await db.deployment_configs.find_one({"id": config_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Deployment config not found")
+    
+    # Update the config
+    config_dict = config_input.model_dump()
+    config_dict['id'] = config_id
+    config_dict['created_at'] = existing.get('created_at')
+    
+    config_obj = DeploymentConfig(**config_dict)
+    doc = config_obj.model_dump()
+    
+    if isinstance(doc['created_at'], datetime):
+        doc['created_at'] = doc['created_at'].isoformat()
+    
+    await db.deployment_configs.update_one(
+        {"id": config_id},
+        {"$set": doc}
+    )
+    
+    return config_obj
+
 @api_router.delete("/deployment-configs/{config_id}")
 async def delete_deployment_config(config_id: str):
     result = await db.deployment_configs.delete_one({"id": config_id})
