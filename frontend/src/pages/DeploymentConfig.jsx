@@ -22,6 +22,7 @@ const DeploymentConfig = () => {
   const [newConfig, setNewConfig] = useState({
     repo_id: '',
     deploy_type: 'ftp',
+    project_type: 'react',
     config: {
       host: '',
       username: '',
