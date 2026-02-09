@@ -510,15 +510,26 @@ const DeploymentConfig = () => {
                   )}
                 </div>
 
-                <button
-                  onClick={() => handleDeploy(config)}
-                  data-testid={`deploy-${config.id}`}
-                  disabled={deployingId === config.id}
-                  className="btn-primary w-full flex items-center justify-center gap-2"
-                >
-                  <Rocket className="w-4 h-4" />
-                  {deployingId === config.id ? 'Deploying...' : 'Deploy Now'}
-                </button>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => handlePreview(config)}
+                    data-testid={`preview-${config.id}`}
+                    disabled={previewingId === config.id}
+                    className="btn-secondary flex-1 flex items-center justify-center gap-2"
+                  >
+                    <Eye className="w-4 h-4" />
+                    {previewingId === config.id ? 'Loading...' : 'Preview'}
+                  </button>
+                  <button
+                    onClick={() => handleDeploy(config)}
+                    data-testid={`deploy-${config.id}`}
+                    disabled={deployingId === config.id}
+                    className="btn-primary flex-1 flex items-center justify-center gap-2"
+                  >
+                    <Rocket className="w-4 h-4" />
+                    {deployingId === config.id ? 'Deploying...' : 'Deploy'}
+                  </button>
+                </div>
               </div>
             ))}
           </div>
