@@ -116,12 +116,22 @@ const DeploymentConfig = () => {
   };
 
   const handleDeploy = async (config) => {
+    setDeployingId(config.id);
+    toast.loading('Starting deployment...', { id: 'deploy-toast' });
+    
     try {
       const response = await axios.post(`${API}/repos/${config.repo_id}/deploy`, {});
-      toast.success(response.data.message);
+      toast.success(response.data.message, { id: 'deploy-toast' });
+      
+      // Refresh operations to show deployment status
+      setTimeout(() => {
+        window.location.href = '/operations';
+      }, 1500);
     } catch (error) {
       console.error('Error deploying:', error);
-      toast.error(error.response?.data?.detail || 'Deployment failed');
+      toast.error(error.response?.data?.detail || 'Deployment failed', { id: 'deploy-toast' });
+    } finally {
+      setDeployingId(null);
     }
   };
 
