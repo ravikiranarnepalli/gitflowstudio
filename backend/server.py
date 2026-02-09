@@ -1,56 +1,56 @@
-from fastapi import FastAPI, APIRouter, HTTPException, BackgroundTasks
+from fastapi import FastAPI, APIRouter, HTTPException
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
+import aiomysql
 import os
 import logging
 from pathlib import Path
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 import uuid
 from datetime import datetime, timezone
 import git
 import shutil
 import tempfile
-import paramiko
 from ftplib import FTP, FTP_TLS
-import requests
+import subprocess
 import json
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# MongoDB connection
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
-
-# Create the main app without a prefix
+# Create the main app
 app = FastAPI()
-
-# Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# ============= Models =============
+# MySQL connection pool
+pool = None
 
-class Repository(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    name: str
-    provider: str  # github, gitlab, bitbucket
-    url: str
-    auth_type: str  # pat, ssh, oauth
-    auth_data: Dict[str, Any]  # Encrypted credentials
-    default_branch: str = "main"
-    is_local: bool = False  # True for /app codebase
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+async def get_pool():
+    global pool
+    if pool is None:
+        try:
+            pool = await aiomysql.create_pool(
+                host=os.environ.get('MYSQL_HOST', 'localhost'),
+                port=int(os.environ.get('MYSQL_PORT', 3306)),
+                user=os.environ.get('MYSQL_USER', 'root'),
+                password=os.environ.get('MYSQL_PASSWORD', ''),
+                db=os.environ.get('MYSQL_DATABASE', 'deployflow'),
+                autocommit=True,
+                minsize=1,
+                maxsize=10
+            )
+            logger.info("✅ MySQL connected successfully")
+        except Exception as e:
+            logger.error(f"❌ MySQL connection failed: {e}")
+            logger.warning("⚠️  Running without database - configure MYSQL_* in .env")
+    return pool
+
+# ============= Models =============
 
 class RepositoryCreate(BaseModel):
     name: str
@@ -60,38 +60,6 @@ class RepositoryCreate(BaseModel):
     auth_data: Dict[str, Any]
     default_branch: str = "main"
     is_local: bool = False
-
-class GitOperation(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    repo_id: str
-    operation_type: str  # create_branch, push, merge, deploy
-    branch_name: Optional[str] = None
-    status: str  # pending, success, failed
-    message: str
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-class GitOperationCreate(BaseModel):
-    repo_id: str
-    operation_type: str
-    branch_name: Optional[str] = None
-    status: str = "pending"
-    message: str = ""
-
-class DeploymentConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    repo_id: str
-    deploy_type: str  # ftp, cpanel
-    project_type: str = "static"  # react, angular, vue, nodejs, python, static
-    config: Dict[str, Any]  # host, username, password, path, etc.
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-class DeploymentConfigCreate(BaseModel):
-    repo_id: str
-    deploy_type: str
-    project_type: str = "static"
-    config: Dict[str, Any]
 
 class BranchCreateRequest(BaseModel):
     branch_name: str
@@ -104,6 +72,12 @@ class PushRequest(BaseModel):
 class MergeRequest(BaseModel):
     source_branch: str
     target_branch: str = "main"
+
+class DeploymentConfigCreate(BaseModel):
+    repo_id: str
+    deploy_type: str
+    project_type: str = "static"
+    config: Dict[str, Any]
 
 class DeployRequest(BaseModel):
     branch_name: Optional[str] = None
@@ -120,80 +94,13 @@ class TestFTPRequest(BaseModel):
     password: str
     use_tls: bool = False
 
-# ============= Repository Endpoints =============
-
-@api_router.get("/repos", response_model=List[Repository])
-async def get_repositories():
-    repos = await db.repositories.find({}, {"_id": 0}).to_list(1000)
-    for repo in repos:
-        if isinstance(repo.get('created_at'), str):
-            repo['created_at'] = datetime.fromisoformat(repo['created_at'])
-    return repos
-
-@api_router.post("/repos", response_model=Repository)
-async def create_repository(repo_input: RepositoryCreate):
-    repo_dict = repo_input.model_dump()
-    repo_obj = Repository(**repo_dict)
-    
-    doc = repo_obj.model_dump()
-    doc['created_at'] = doc['created_at'].isoformat()
-    
-    await db.repositories.insert_one(doc)
-    return repo_obj
-
-@api_router.get("/repos/{repo_id}", response_model=Repository)
-async def get_repository(repo_id: str):
-    repo = await db.repositories.find_one({"id": repo_id}, {"_id": 0})
-    if not repo:
-        raise HTTPException(status_code=404, detail="Repository not found")
-    if isinstance(repo.get('created_at'), str):
-        repo['created_at'] = datetime.fromisoformat(repo['created_at'])
-    return repo
-
-@api_router.delete("/repos/{repo_id}")
-async def delete_repository(repo_id: str):
-    result = await db.repositories.delete_one({"id": repo_id})
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Repository not found")
-    return {"message": "Repository deleted successfully"}
-
-# ============= Git Operation Endpoints =============
-
-@api_router.get("/operations", response_model=List[GitOperation])
-async def get_operations(repo_id: Optional[str] = None):
-    query = {"repo_id": repo_id} if repo_id else {}
-    operations = await db.operations.find(query, {"_id": 0}).sort("created_at", -1).to_list(100)
-    for op in operations:
-        if isinstance(op.get('created_at'), str):
-            op['created_at'] = datetime.fromisoformat(op['created_at'])
-    return operations
-
-@api_router.post("/operations", response_model=GitOperation)
-async def create_operation(op_input: GitOperationCreate):
-    op_dict = op_input.model_dump()
-    op_obj = GitOperation(**op_dict)
-    
-    doc = op_obj.model_dump()
-    doc['created_at'] = doc['created_at'].isoformat()
-    
-    await db.operations.insert_one(doc)
-    return op_obj
-
-async def update_operation_status(op_id: str, status: str, message: str):
-    await db.operations.update_one(
-        {"id": op_id},
-        {"$set": {"status": status, "message": message}}
-    )
-
-# ============= Git Operations Logic =============
+# ============= Helper Functions =============
 
 def get_auth_url(url: str, provider: str, auth_type: str, auth_data: dict) -> str:
-    """Generate authenticated URL for Git operations"""
     if auth_type == 'pat':
         token = auth_data.get('token')
         if not token:
-            raise ValueError("Access token is required for PAT authentication")
-        
+            raise ValueError("Access token is required")
         if 'github.com' in url:
             return url.replace('https://', f'https://{token}@')
         elif 'gitlab.com' in url:
@@ -201,719 +108,675 @@ def get_auth_url(url: str, provider: str, auth_type: str, auth_data: dict) -> st
         elif 'bitbucket.org' in url:
             username = auth_data.get('username', 'x-token-auth')
             return url.replace('https://', f'https://{username}:{token}@')
-        else:
-            return url.replace('https://', f'https://{token}@')
-    elif auth_type == 'ssh':
-        return url
-    else:
-        return url
+        return url.replace('https://', f'https://{token}@')
+    return url
 
 def build_project(repo_path: str, project_type: str) -> str:
-    """Build the project and return the deployment directory"""
-    import subprocess
-    
     logger.info(f"Building {project_type} project at {repo_path}")
     
     if project_type in ['react', 'vue', 'nextjs']:
-        # Frontend build process
-        build_dir = os.path.join(repo_path, 'build')
-        
-        # Check if it's a frontend app
-        package_json_path = os.path.join(repo_path, 'package.json')
-        if not os.path.exists(package_json_path):
-            raise ValueError("No package.json found. Cannot build frontend project.")
+        package_json = os.path.join(repo_path, 'package.json')
+        if not os.path.exists(package_json):
+            raise ValueError("No package.json found.")
         
         try:
-            # Install dependencies
             logger.info("Installing dependencies...")
-            install_result = subprocess.run(
-                ['npm', 'install', '--legacy-peer-deps'],
-                cwd=repo_path,
-                capture_output=True,
-                text=True,
-                timeout=300
-            )
+            subprocess.run(['npm', 'install', '--legacy-peer-deps'], cwd=repo_path, capture_output=True, timeout=300)
             
-            if install_result.returncode != 0:
-                logger.error(f"npm install failed: {install_result.stderr}")
-                raise ValueError(f"Dependency installation failed: {install_result.stderr[:200]}")
+            logger.info("Running build...")
+            result = subprocess.run(['npm', 'run', 'build'], cwd=repo_path, capture_output=True, text=True, timeout=600)
             
-            # Run build
-            logger.info("Running build command...")
-            build_result = subprocess.run(
-                ['npm', 'run', 'build'],
-                cwd=repo_path,
-                capture_output=True,
-                text=True,
-                timeout=600
-            )
+            if result.returncode != 0:
+                raise ValueError(f"Build failed: {result.stderr[:300]}")
             
-            if build_result.returncode != 0:
-                logger.error(f"Build failed: {build_result.stderr}")
-                raise ValueError(f"Build failed: {build_result.stderr[:300]}")
-            
-            # Check for build output
-            if os.path.exists(build_dir):
-                return build_dir
-            elif os.path.exists(os.path.join(repo_path, 'dist')):
-                return os.path.join(repo_path, 'dist')
-            else:
-                raise ValueError("Build completed but output directory not found (expected 'build' or 'dist')")
-                
+            for dir_name in ['build', 'dist']:
+                dir_path = os.path.join(repo_path, dir_name)
+                if os.path.exists(dir_path):
+                    return dir_path
+            raise ValueError("Build output directory not found")
         except subprocess.TimeoutExpired:
-            raise ValueError("Build process timed out. Your project might be too large or build is stuck.")
-        except FileNotFoundError:
-            raise ValueError("npm not found. Please ensure Node.js is installed on the server.")
+            raise ValueError("Build timed out")
     
     elif project_type == 'angular':
-        # Angular build
-        dist_dir = os.path.join(repo_path, 'dist')
-        
-        package_json_path = os.path.join(repo_path, 'package.json')
-        if not os.path.exists(package_json_path):
-            raise ValueError("No package.json found. Cannot build Angular project.")
+        package_json = os.path.join(repo_path, 'package.json')
+        if not os.path.exists(package_json):
+            raise ValueError("No package.json found.")
         
         try:
-            # Install dependencies including Angular CLI
             logger.info("Installing Angular dependencies...")
-            install_result = subprocess.run(
-                ['npm', 'install', '--legacy-peer-deps'],
-                cwd=repo_path,
-                capture_output=True,
-                text=True,
-                timeout=300
-            )
+            subprocess.run(['npm', 'install', '--legacy-peer-deps'], cwd=repo_path, capture_output=True, timeout=300)
             
-            if install_result.returncode != 0:
-                logger.error(f"npm install failed: {install_result.stderr}")
-                raise ValueError(f"Dependency installation failed: {install_result.stderr[:200]}")
-            
-            # Run Angular build using npx
             logger.info("Running Angular build...")
-            build_result = subprocess.run(
-                ['npx', 'ng', 'build', '--configuration=production'],
-                cwd=repo_path,
-                capture_output=True,
-                text=True,
-                timeout=600
-            )
+            result = subprocess.run(['npx', 'ng', 'build', '--configuration=production'], cwd=repo_path, capture_output=True, text=True, timeout=600)
             
-            if build_result.returncode != 0:
-                # Try with npm run build as fallback
-                logger.info("Trying npm run build as fallback...")
-                build_result = subprocess.run(
-                    ['npm', 'run', 'build'],
-                    cwd=repo_path,
-                    capture_output=True,
-                    text=True,
-                    timeout=600
-                )
-                
-                if build_result.returncode != 0:
-                    logger.error(f"Angular build failed: {build_result.stderr}")
-                    raise ValueError(f"Angular build failed: {build_result.stderr[:300]}")
+            if result.returncode != 0:
+                result = subprocess.run(['npm', 'run', 'build'], cwd=repo_path, capture_output=True, text=True, timeout=600)
+                if result.returncode != 0:
+                    raise ValueError(f"Angular build failed: {result.stderr[:300]}")
             
-            # Angular creates dist/project-name folder
+            dist_dir = os.path.join(repo_path, 'dist')
             if os.path.exists(dist_dir):
-                # Find the actual build folder inside dist
                 subdirs = [d for d in os.listdir(dist_dir) if os.path.isdir(os.path.join(dist_dir, d))]
                 if subdirs:
                     return os.path.join(dist_dir, subdirs[0])
                 return dist_dir
-            else:
-                raise ValueError("Build completed but dist directory not found")
-                
+            raise ValueError("dist directory not found")
         except subprocess.TimeoutExpired:
-            raise ValueError("Build process timed out. Angular build might be too large or stuck.")
-        except FileNotFoundError:
-            raise ValueError("npm/npx not found. Please ensure Node.js is installed on the server.")
+            raise ValueError("Build timed out")
     
-    elif project_type == 'nodejs':
-        # Node.js - check if build script exists
-        package_json_path = os.path.join(repo_path, 'package.json')
-        if os.path.exists(package_json_path):
-            try:
-                with open(package_json_path, 'r') as f:
-                    package_data = json.load(f)
-                    scripts = package_data.get('scripts', {})
-                    
-                    # If build script exists, run it
-                    if 'build' in scripts:
-                        logger.info("Running Node.js build script...")
-                        subprocess.run(
-                            ['npm', 'install', '--production'],
-                            cwd=repo_path,
-                            capture_output=True,
-                            timeout=300
-                        )
-                        subprocess.run(
-                            ['npm', 'run', 'build'],
-                            cwd=repo_path,
-                            capture_output=True,
-                            timeout=300
-                        )
-            except Exception as e:
-                logger.warning(f"Build script execution warning: {str(e)}")
-        
-        return repo_path
-    
-    elif project_type == 'python':
-        # Python - deploy source code
-        return repo_path
-    
-    elif project_type == 'static':
-        # Static HTML/CSS/JS - deploy as is
-        return repo_path
-    
-    else:
-        # Unknown type, deploy everything
-        return repo_path
+    return repo_path
 
 def get_files_to_deploy(deploy_dir: str, project_type: str):
-    """Get list of files to deploy based on project type"""
-    files_to_deploy = []
-    
-    # Files/folders to exclude based on project type
     exclude_patterns = {
-        'react': ['.git', 'node_modules', 'src', 'public', 'tests', 'test', '.env', '.env.local', 
-                  'package.json', 'package-lock.json', 'yarn.lock', 'tsconfig.json', 'README.md'],
-        'angular': ['.git', 'node_modules', 'src', 'tests', 'test', '.env', 'package.json', 
-                    'angular.json', 'tsconfig.json', 'README.md'],
-        'vue': ['.git', 'node_modules', 'src', 'public', 'tests', 'test', '.env', 'package.json', 
-                'vue.config.js', 'README.md'],
-        'nextjs': ['.git', 'node_modules', 'pages', 'components', 'public', '.env', 'package.json', 
-                   'next.config.js', 'README.md'],
-        'nodejs': ['.git', 'node_modules', 'tests', 'test', '__tests__', '.env', '.env.example', 
-                   'README.md', '.gitignore', 'nodemon.json'],
-        'python': ['.git', 'venv', '__pycache__', '*.pyc', 'tests', 'test', '.env', '.env.example', 
-                   'README.md', '.gitignore', 'pytest.ini'],
-        'static': ['.git', 'node_modules', '.env', 'README.md', '.gitignore']
+        'react': ['.git', 'node_modules', 'src', 'public', 'tests', '.env', 'package.json', 'README.md'],
+        'angular': ['.git', 'node_modules', 'src', 'tests', '.env', 'package.json', 'angular.json', 'README.md'],
+        'vue': ['.git', 'node_modules', 'src', 'public', 'tests', '.env', 'package.json', 'README.md'],
+        'nextjs': ['.git', 'node_modules', 'pages', 'components', '.env', 'package.json', 'README.md'],
+        'nodejs': ['.git', 'node_modules', 'tests', '.env', 'README.md'],
+        'python': ['.git', 'venv', '__pycache__', 'tests', '.env', 'README.md'],
+        'static': ['.git', 'node_modules', '.env', 'README.md']
     }
     
     excludes = exclude_patterns.get(project_type, ['.git', 'node_modules', '.env'])
+    files = []
     
-    for root, dirs, files in os.walk(deploy_dir):
-        # Skip excluded directories
+    for root, dirs, filenames in os.walk(deploy_dir):
         dirs[:] = [d for d in dirs if d not in excludes and not d.startswith('.')]
         
-        for file in files:
-            # Skip excluded files and hidden files
-            should_skip = False
-            for pattern in excludes:
-                if pattern.startswith('*.'):
-                    # Pattern match
-                    if file.endswith(pattern[1:]):
-                        should_skip = True
-                        break
-                elif file == pattern or file.startswith('.'):
-                    should_skip = True
-                    break
+        for filename in filenames:
+            if filename in excludes or filename.startswith('.'):
+                continue
             
-            if not should_skip:
-                local_path = os.path.join(root, file)
-                relative_path = os.path.relpath(local_path, deploy_dir)
-                files_to_deploy.append((local_path, relative_path))
+            local_path = os.path.join(root, filename)
+            relative_path = os.path.relpath(local_path, deploy_dir)
+            file_size = os.path.getsize(local_path)
+            files.append({
+                'local_path': local_path,
+                'relative_path': relative_path.replace(os.sep, '/'),
+                'size': file_size
+            })
     
-    return files_to_deploy
+    return files
 
-def get_git_repo(repo_data: dict):
-    """Clone or open a git repository based on repo data"""
-    try:
-        if repo_data.get('is_local'):
-            # Use /app directory for local codebase
-            return git.Repo('/app')
-        else:
-            # For external repos, clone to temp directory
-            temp_dir = tempfile.mkdtemp()
-            auth_type = repo_data.get('auth_type')
-            url = repo_data.get('url')
-            provider = repo_data.get('provider')
-            
-            auth_url = get_auth_url(url, provider, auth_type, repo_data.get('auth_data', {}))
-            return git.Repo.clone_from(auth_url, temp_dir, depth=1)
-    except git.exc.GitCommandError as e:
-        error_msg = str(e)
-        if 'authentication failed' in error_msg.lower() or 'could not read' in error_msg.lower():
-            raise ValueError("Authentication failed. Please check your credentials (access token, username, or SSH key).")
-        elif 'repository not found' in error_msg.lower():
-            raise ValueError("Repository not found. Please verify the repository URL and your access permissions.")
-        elif 'could not resolve host' in error_msg.lower():
-            raise ValueError("Could not connect to Git server. Please check the repository URL.")
-        else:
-            raise ValueError(f"Git operation failed: {error_msg}")
+def format_size(bytes_size):
+    if bytes_size < 1024:
+        return f"{bytes_size} B"
+    elif bytes_size < 1024 * 1024:
+        return f"{bytes_size / 1024:.1f} KB"
+    return f"{bytes_size / (1024 * 1024):.2f} MB"
 
-@api_router.post("/repos/{repo_id}/create-branch")
-async def create_branch(repo_id: str, request: BranchCreateRequest, background_tasks: BackgroundTasks):
-    repo = await db.repositories.find_one({"id": repo_id}, {"_id": 0})
-    if not repo:
-        raise HTTPException(status_code=404, detail="Repository not found")
-    
-    # Create operation record
-    op_dict = {
-        "repo_id": repo_id,
-        "operation_type": "create_branch",
-        "branch_name": request.branch_name,
-        "status": "pending",
-        "message": f"Creating branch {request.branch_name}"
-    }
-    op_obj = GitOperation(**op_dict)
-    doc = op_obj.model_dump()
-    doc['created_at'] = doc['created_at'].isoformat()
-    await db.operations.insert_one(doc)
-    
+# ============= Repository Endpoints =============
+
+@api_router.get("/repos")
+async def get_repositories():
     try:
-        git_repo = get_git_repo(repo)
+        pool = await get_pool()
+        if not pool:
+            return []
+        async with pool.acquire() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute("SELECT * FROM repositories ORDER BY created_at DESC")
+                rows = await cur.fetchall()
+                return [{
+                    'id': r['id'],
+                    'name': r['name'],
+                    'provider': r['provider'],
+                    'url': r['url'],
+                    'auth_type': r['auth_type'],
+                    'auth_data': {'token': r['auth_token'] or '', 'username': r['auth_username'] or ''},
+                    'default_branch': r['default_branch'],
+                    'is_local': bool(r['is_local']),
+                    'created_at': r['created_at'].isoformat() if r['created_at'] else None
+                } for r in rows]
+    except Exception as e:
+        logger.error(f"Error fetching repos: {e}")
+        return []
+
+@api_router.post("/repos")
+async def create_repository(repo: RepositoryCreate):
+    try:
+        pool = await get_pool()
+        if not pool:
+            raise HTTPException(status_code=500, detail="Database not connected")
         
-        # Create new branch
-        base_branch = request.base_branch or repo.get('default_branch', 'main')
-        
-        # Checkout base branch first
-        if base_branch in [b.name for b in git_repo.branches]:
-            git_repo.git.checkout(base_branch)
-        else:
-            # Try master if main doesn't exist
-            try:
-                git_repo.git.checkout('master')
-            except:
-                git_repo.git.checkout(git_repo.head.ref.name)
-        
-        # Create and checkout new branch
-        new_branch = git_repo.create_head(request.branch_name)
-        new_branch.checkout()
-        
-        await update_operation_status(op_obj.id, "success", f"Branch {request.branch_name} created successfully")
+        repo_id = str(uuid.uuid4())
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "INSERT INTO repositories (id, name, provider, url, auth_type, auth_token, auth_username, default_branch, is_local) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    (repo_id, repo.name, repo.provider, repo.url, repo.auth_type, repo.auth_data.get('token', ''), repo.auth_data.get('username', ''), repo.default_branch, repo.is_local)
+                )
         
         return {
-            "success": True,
-            "message": f"Branch {request.branch_name} created successfully",
-            "operation_id": op_obj.id
+            'id': repo_id,
+            'name': repo.name,
+            'provider': repo.provider,
+            'url': repo.url,
+            'auth_type': repo.auth_type,
+            'auth_data': repo.auth_data,
+            'default_branch': repo.default_branch,
+            'is_local': repo.is_local,
+            'created_at': datetime.now(timezone.utc).isoformat()
         }
-    except ValueError as e:
-        # User-friendly error messages
-        await update_operation_status(op_obj.id, "failed", str(e))
-        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Error creating branch: {str(e)}")
-        error_msg = "Branch creation failed. Please check your credentials and repository access."
-        await update_operation_status(op_obj.id, "failed", error_msg)
-        raise HTTPException(status_code=500, detail=error_msg)
+        logger.error(f"Error creating repo: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@api_router.get("/repos/{repo_id}")
+async def get_repository(repo_id: str):
+    try:
+        pool = await get_pool()
+        if not pool:
+            raise HTTPException(status_code=500, detail="Database not connected")
+        async with pool.acquire() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                await cur.execute("SELECT * FROM repositories WHERE id = %s", (repo_id,))
+                r = await cur.fetchone()
+                if not r:
+                    raise HTTPException(status_code=404, detail="Repository not found")
+                return {
+                    'id': r['id'],
+                    'name': r['name'],
+                    'provider': r['provider'],
+                    'url': r['url'],
+                    'auth_type': r['auth_type'],
+                    'auth_data': {'token': r['auth_token'] or '', 'username': r['auth_username'] or ''},
+                    'default_branch': r['default_branch'],
+                    'is_local': bool(r['is_local']),
+                    'created_at': r['created_at'].isoformat() if r['created_at'] else None
+                }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching repo: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@api_router.delete("/repos/{repo_id}")
+async def delete_repository(repo_id: str):
+    try:
+        pool = await get_pool()
+        if not pool:
+            raise HTTPException(status_code=500, detail="Database not connected")
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("DELETE FROM repositories WHERE id = %s", (repo_id,))
+                if cur.rowcount == 0:
+                    raise HTTPException(status_code=404, detail="Repository not found")
+        return {"message": "Repository deleted successfully"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting repo: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ============= Operations Endpoints =============
+
+@api_router.get("/operations")
+async def get_operations(repo_id: Optional[str] = None):
+    try:
+        pool = await get_pool()
+        if not pool:
+            return []
+        async with pool.acquire() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                if repo_id:
+                    await cur.execute("SELECT * FROM operations WHERE repo_id = %s ORDER BY created_at DESC LIMIT 100", (repo_id,))
+                else:
+                    await cur.execute("SELECT * FROM operations ORDER BY created_at DESC LIMIT 100")
+                rows = await cur.fetchall()
+                return [{
+                    'id': r['id'],
+                    'repo_id': r['repo_id'],
+                    'operation_type': r['operation_type'],
+                    'branch_name': r['branch_name'],
+                    'status': r['status'],
+                    'message': r['message'],
+                    'created_at': r['created_at'].isoformat() if r['created_at'] else None
+                } for r in rows]
+    except Exception as e:
+        logger.error(f"Error fetching operations: {e}")
+        return []
+
+async def create_operation(repo_id: str, op_type: str, branch_name: str, status: str, message: str) -> str:
+    op_id = str(uuid.uuid4())
+    try:
+        pool = await get_pool()
+        if pool:
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute(
+                        "INSERT INTO operations (id, repo_id, operation_type, branch_name, status, message) VALUES (%s, %s, %s, %s, %s, %s)",
+                        (op_id, repo_id, op_type, branch_name, status, message)
+                    )
+    except Exception as e:
+        logger.error(f"Error creating operation: {e}")
+    return op_id
+
+async def update_operation(op_id: str, status: str, message: str):
+    try:
+        pool = await get_pool()
+        if pool:
+            async with pool.acquire() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute("UPDATE operations SET status = %s, message = %s WHERE id = %s", (status, message, op_id))
+    except Exception as e:
+        logger.error(f"Error updating operation: {e}")
+
+# ============= Git Operations =============
+
+async def get_repo_data(repo_id: str):
+    pool = await get_pool()
+    if not pool:
+        raise HTTPException(status_code=500, detail="Database not connected")
+    async with pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute("SELECT * FROM repositories WHERE id = %s", (repo_id,))
+            repo = await cur.fetchone()
+            if not repo:
+                raise HTTPException(status_code=404, detail="Repository not found")
+            return repo
+
+@api_router.post("/repos/{repo_id}/create-branch")
+async def create_branch(repo_id: str, request: BranchCreateRequest):
+    repo = await get_repo_data(repo_id)
+    op_id = await create_operation(repo_id, 'create_branch', request.branch_name, 'pending', f'Creating branch {request.branch_name}')
+    
+    try:
+        temp_dir = tempfile.mkdtemp()
+        auth_url = get_auth_url(repo['url'], repo['provider'], repo['auth_type'], {'token': repo['auth_token'], 'username': repo['auth_username']})
+        
+        git_repo = git.Repo.clone_from(auth_url, temp_dir, depth=1)
+        base_branch = request.base_branch or repo['default_branch'] or 'main'
+        
+        new_branch = git_repo.create_head(request.branch_name)
+        new_branch.checkout()
+        git_repo.remote('origin').push(request.branch_name, set_upstream=True)
+        
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        await update_operation(op_id, 'success', f'Branch {request.branch_name} created successfully')
+        
+        return {"success": True, "message": f"Branch {request.branch_name} created successfully", "operation_id": op_id}
+    except Exception as e:
+        await update_operation(op_id, 'failed', str(e))
+        raise HTTPException(status_code=400, detail=str(e))
 
 @api_router.post("/repos/{repo_id}/push")
 async def push_to_branch(repo_id: str, request: PushRequest):
-    repo = await db.repositories.find_one({"id": repo_id}, {"_id": 0})
-    if not repo:
-        raise HTTPException(status_code=404, detail="Repository not found")
-    
-    # Create operation record
-    op_dict = {
-        "repo_id": repo_id,
-        "operation_type": "push",
-        "branch_name": request.branch_name,
-        "status": "pending",
-        "message": f"Pushing to branch {request.branch_name}"
-    }
-    op_obj = GitOperation(**op_dict)
-    doc = op_obj.model_dump()
-    doc['created_at'] = doc['created_at'].isoformat()
-    await db.operations.insert_one(doc)
+    repo = await get_repo_data(repo_id)
+    op_id = await create_operation(repo_id, 'push', request.branch_name, 'pending', f'Pushing to {request.branch_name}')
     
     try:
-        git_repo = get_git_repo(repo)
+        temp_dir = tempfile.mkdtemp()
+        auth_url = get_auth_url(repo['url'], repo['provider'], repo['auth_type'], {'token': repo['auth_token'], 'username': repo['auth_username']})
         
-        # Checkout the branch
-        try:
-            git_repo.git.checkout(request.branch_name)
-        except git.exc.GitCommandError:
-            raise ValueError(f"Branch '{request.branch_name}' does not exist. Please create it first.")
-        
-        # Stage all changes
+        git_repo = git.Repo.clone_from(auth_url, temp_dir)
+        git_repo.git.checkout(request.branch_name)
         git_repo.git.add(A=True)
         
-        # Commit if there are changes
         if git_repo.is_dirty() or git_repo.untracked_files:
             git_repo.index.commit(request.commit_message)
         
-        # Push to remote
-        origin = git_repo.remote('origin')
-        origin.push(request.branch_name)
+        git_repo.remote('origin').push(request.branch_name)
         
-        await update_operation_status(op_obj.id, "success", f"Pushed to {request.branch_name} successfully")
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        await update_operation(op_id, 'success', f'Pushed to {request.branch_name} successfully')
         
-        return {
-            "success": True,
-            "message": f"Pushed to {request.branch_name} successfully",
-            "operation_id": op_obj.id
-        }
-    except ValueError as e:
-        await update_operation_status(op_obj.id, "failed", str(e))
-        raise HTTPException(status_code=400, detail=str(e))
+        return {"success": True, "message": f"Pushed to {request.branch_name} successfully", "operation_id": op_id}
     except Exception as e:
-        logger.error(f"Error pushing to branch: {str(e)}")
-        error_msg = "Push failed. Please check your credentials and branch name."
-        await update_operation_status(op_obj.id, "failed", error_msg)
-        raise HTTPException(status_code=500, detail=error_msg)
+        await update_operation(op_id, 'failed', str(e))
+        raise HTTPException(status_code=400, detail=str(e))
 
 @api_router.post("/repos/{repo_id}/merge")
 async def merge_branches(repo_id: str, request: MergeRequest):
-    repo = await db.repositories.find_one({"id": repo_id}, {"_id": 0})
-    if not repo:
-        raise HTTPException(status_code=404, detail="Repository not found")
-    
-    # Create operation record
-    op_dict = {
-        "repo_id": repo_id,
-        "operation_type": "merge",
-        "branch_name": f"{request.source_branch} -> {request.target_branch}",
-        "status": "pending",
-        "message": f"Merging {request.source_branch} into {request.target_branch}"
-    }
-    op_obj = GitOperation(**op_dict)
-    doc = op_obj.model_dump()
-    doc['created_at'] = doc['created_at'].isoformat()
-    await db.operations.insert_one(doc)
+    repo = await get_repo_data(repo_id)
+    op_id = await create_operation(repo_id, 'merge', f'{request.source_branch} -> {request.target_branch}', 'pending', f'Merging {request.source_branch} into {request.target_branch}')
     
     try:
-        git_repo = get_git_repo(repo)
+        temp_dir = tempfile.mkdtemp()
+        auth_url = get_auth_url(repo['url'], repo['provider'], repo['auth_type'], {'token': repo['auth_token'], 'username': repo['auth_username']})
         
-        # Checkout target branch
-        try:
-            git_repo.git.checkout(request.target_branch)
-        except git.exc.GitCommandError:
-            raise ValueError(f"Target branch '{request.target_branch}' does not exist.")
+        git_repo = git.Repo.clone_from(auth_url, temp_dir)
+        git_repo.git.checkout(request.target_branch)
+        git_repo.git.merge(request.source_branch)
+        git_repo.remote('origin').push(request.target_branch)
         
-        # Merge source branch
-        try:
-            git_repo.git.merge(request.source_branch)
-        except git.exc.GitCommandError as e:
-            if 'conflict' in str(e).lower():
-                raise ValueError(f"Merge conflict detected. Please resolve conflicts manually.")
-            else:
-                raise ValueError(f"Source branch '{request.source_branch}' not found or cannot be merged.")
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        await update_operation(op_id, 'success', f'Merged {request.source_branch} into {request.target_branch} successfully')
         
-        # Push merged changes
-        origin = git_repo.remote('origin')
-        origin.push(request.target_branch)
+        return {"success": True, "message": f"Merged {request.source_branch} into {request.target_branch} successfully", "operation_id": op_id}
+    except Exception as e:
+        await update_operation(op_id, 'failed', str(e))
+        raise HTTPException(status_code=400, detail=str(e))
+
+# ============= Deployment Config Endpoints =============
+
+@api_router.get("/deployment-configs")
+async def get_deployment_configs(repo_id: Optional[str] = None):
+    try:
+        pool = await get_pool()
+        if not pool:
+            return []
+        async with pool.acquire() as conn:
+            async with conn.cursor(aiomysql.DictCursor) as cur:
+                if repo_id:
+                    await cur.execute("SELECT * FROM deployment_configs WHERE repo_id = %s ORDER BY created_at DESC", (repo_id,))
+                else:
+                    await cur.execute("SELECT * FROM deployment_configs ORDER BY created_at DESC")
+                rows = await cur.fetchall()
+                return [{
+                    'id': r['id'],
+                    'repo_id': r['repo_id'],
+                    'deploy_type': r['deploy_type'],
+                    'project_type': r['project_type'],
+                    'config': {
+                        'host': r['host'],
+                        'username': r['username'],
+                        'password': r['password'],
+                        'path': r['remote_path'],
+                        'use_tls': bool(r['use_tls']),
+                        'api_token': r['api_token']
+                    },
+                    'created_at': r['created_at'].isoformat() if r['created_at'] else None
+                } for r in rows]
+    except Exception as e:
+        logger.error(f"Error fetching deployment configs: {e}")
+        return []
+
+@api_router.post("/deployment-configs")
+async def create_deployment_config(config: DeploymentConfigCreate):
+    try:
+        pool = await get_pool()
+        if not pool:
+            raise HTTPException(status_code=500, detail="Database not connected")
         
-        await update_operation_status(op_obj.id, "success", 
-            f"Merged {request.source_branch} into {request.target_branch} and pushed successfully")
+        config_id = str(uuid.uuid4())
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "INSERT INTO deployment_configs (id, repo_id, deploy_type, project_type, host, username, password, remote_path, use_tls, api_token) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    (config_id, config.repo_id, config.deploy_type, config.project_type, config.config.get('host'), config.config.get('username'), config.config.get('password'), config.config.get('path', '/'), config.config.get('use_tls', False), config.config.get('api_token', ''))
+                )
         
         return {
-            "success": True,
-            "message": f"Merged {request.source_branch} into {request.target_branch} successfully",
-            "operation_id": op_obj.id
+            'id': config_id,
+            'repo_id': config.repo_id,
+            'deploy_type': config.deploy_type,
+            'project_type': config.project_type,
+            'config': config.config,
+            'created_at': datetime.now(timezone.utc).isoformat()
         }
-    except ValueError as e:
-        await update_operation_status(op_obj.id, "failed", str(e))
-        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Error merging branches: {str(e)}")
-        error_msg = "Merge failed. Please check your credentials and branch names."
-        await update_operation_status(op_obj.id, "failed", error_msg)
-        raise HTTPException(status_code=500, detail=error_msg)
+        logger.error(f"Error creating deployment config: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-# ============= Deployment Endpoints =============
-
-@api_router.get("/deployment-configs", response_model=List[DeploymentConfig])
-async def get_deployment_configs(repo_id: Optional[str] = None):
-    query = {"repo_id": repo_id} if repo_id else {}
-    configs = await db.deployment_configs.find(query, {"_id": 0}).to_list(100)
-    for config in configs:
-        if isinstance(config.get('created_at'), str):
-            config['created_at'] = datetime.fromisoformat(config['created_at'])
-    return configs
-
-@api_router.post("/deployment-configs", response_model=DeploymentConfig)
-async def create_deployment_config(config_input: DeploymentConfigCreate):
-    config_dict = config_input.model_dump()
-    config_obj = DeploymentConfig(**config_dict)
-    
-    doc = config_obj.model_dump()
-    doc['created_at'] = doc['created_at'].isoformat()
-    
-    await db.deployment_configs.insert_one(doc)
-    return config_obj
-
-@api_router.put("/deployment-configs/{config_id}", response_model=DeploymentConfig)
-async def update_deployment_config(config_id: str, config_input: DeploymentConfigCreate):
-    # Check if config exists
-    existing = await db.deployment_configs.find_one({"id": config_id}, {"_id": 0})
-    if not existing:
-        raise HTTPException(status_code=404, detail="Deployment config not found")
-    
-    # Update the config
-    config_dict = config_input.model_dump()
-    config_dict['id'] = config_id
-    config_dict['created_at'] = existing.get('created_at')
-    
-    config_obj = DeploymentConfig(**config_dict)
-    doc = config_obj.model_dump()
-    
-    if isinstance(doc['created_at'], datetime):
-        doc['created_at'] = doc['created_at'].isoformat()
-    
-    await db.deployment_configs.update_one(
-        {"id": config_id},
-        {"$set": doc}
-    )
-    
-    return config_obj
+@api_router.put("/deployment-configs/{config_id}")
+async def update_deployment_config(config_id: str, config: DeploymentConfigCreate):
+    try:
+        pool = await get_pool()
+        if not pool:
+            raise HTTPException(status_code=500, detail="Database not connected")
+        
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "UPDATE deployment_configs SET repo_id = %s, deploy_type = %s, project_type = %s, host = %s, username = %s, password = %s, remote_path = %s, use_tls = %s, api_token = %s WHERE id = %s",
+                    (config.repo_id, config.deploy_type, config.project_type, config.config.get('host'), config.config.get('username'), config.config.get('password'), config.config.get('path', '/'), config.config.get('use_tls', False), config.config.get('api_token', ''), config_id)
+                )
+                if cur.rowcount == 0:
+                    raise HTTPException(status_code=404, detail="Deployment config not found")
+        
+        return {
+            'id': config_id,
+            'repo_id': config.repo_id,
+            'deploy_type': config.deploy_type,
+            'project_type': config.project_type,
+            'config': config.config
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error updating deployment config: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @api_router.delete("/deployment-configs/{config_id}")
 async def delete_deployment_config(config_id: str):
-    result = await db.deployment_configs.delete_one({"id": config_id})
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Deployment config not found")
-    return {"message": "Deployment config deleted successfully"}
-
-@api_router.post("/repos/{repo_id}/deploy")
-async def deploy_repository(repo_id: str, request: DeployRequest):
-    repo = await db.repositories.find_one({"id": repo_id}, {"_id": 0})
-    if not repo:
-        raise HTTPException(status_code=404, detail="Repository not found")
-    
-    # Get deployment config
-    deploy_config = await db.deployment_configs.find_one({"repo_id": repo_id}, {"_id": 0})
-    if not deploy_config:
-        raise HTTPException(status_code=404, detail="Deployment config not found for this repository")
-    
-    # Create operation record
-    op_dict = {
-        "repo_id": repo_id,
-        "operation_type": "deploy",
-        "branch_name": request.branch_name,
-        "status": "pending",
-        "message": f"Deploying to {deploy_config['deploy_type']}"
-    }
-    op_obj = GitOperation(**op_dict)
-    doc = op_obj.model_dump()
-    doc['created_at'] = doc['created_at'].isoformat()
-    await db.operations.insert_one(doc)
-    
     try:
-        git_repo = get_git_repo(repo)
-        
-        if request.branch_name:
-            git_repo.git.checkout(request.branch_name)
-        
-        repo_path = git_repo.working_dir
-        project_type = deploy_config.get('project_type', 'static')
-        
-        # Build the project if needed
-        try:
-            deploy_dir = build_project(repo_path, project_type)
-            logger.info(f"Build completed. Deploy directory: {deploy_dir}")
-        except ValueError as build_error:
-            error_msg = f"Build failed: {str(build_error)}"
-            await update_operation_status(op_obj.id, "failed", error_msg)
-            raise ValueError(error_msg)
-        
-        # Get files to deploy
-        files_to_deploy = get_files_to_deploy(deploy_dir, project_type)
-        
-        if not files_to_deploy:
-            raise ValueError("No files found to deploy after build")
-        
-        deploy_type = deploy_config['deploy_type']
-        config = deploy_config['config']
-        
-        if deploy_type == 'ftp':
-            # FTP Deployment
-            host = config.get('host')
-            username = config.get('username')
-            password = config.get('password')
-            remote_path = config.get('path', '/')
-            use_tls = config.get('use_tls', False)
-            
-            try:
-                if use_tls:
-                    ftp = FTP_TLS(host, timeout=30)
-                else:
-                    ftp = FTP(host, timeout=30)
-                
-                ftp.login(username, password)
-                
-                # Change to remote directory
-                try:
-                    ftp.cwd(remote_path)
-                except:
-                    ftp.mkd(remote_path)
-                    ftp.cwd(remote_path)
-                
-                uploaded_count = 0
-                failed_files = []
-                created_dirs = set()  # Track already created directories
-                
-                # Helper function to create remote directory recursively
-                def ensure_remote_dir(ftp, base_path, rel_dir):
-                    """Create remote directory structure from base_path"""
-                    if not rel_dir or rel_dir in created_dirs:
-                        return True
-                    
-                    # Normalize path separators
-                    rel_dir = rel_dir.replace(os.sep, '/')
-                    dirs = [d for d in rel_dir.split('/') if d]
-                    
-                    # Start from base path
-                    try:
-                        ftp.cwd(base_path)
-                    except:
-                        return False
-                    
-                    # Create each directory level
-                    current_path = base_path.rstrip('/')
-                    for d in dirs:
-                        current_path = f"{current_path}/{d}"
-                        if current_path not in created_dirs:
-                            try:
-                                ftp.cwd(d)
-                            except:
-                                try:
-                                    ftp.mkd(d)
-                                    ftp.cwd(d)
-                                    created_dirs.add(current_path)
-                                except Exception as e:
-                                    logger.warning(f"Failed to create directory {current_path}: {e}")
-                                    return False
-                    
-                    created_dirs.add(rel_dir)
-                    return True
-                
-                # Upload each file
-                for local_path, relative_path in files_to_deploy:
-                    try:
-                        # Normalize path
-                        relative_path_normalized = relative_path.replace(os.sep, '/')
-                        remote_dir = os.path.dirname(relative_path_normalized)
-                        
-                        # Create directory structure if needed
-                        if remote_dir:
-                            if not ensure_remote_dir(ftp, remote_path, remote_dir):
-                                failed_files.append(relative_path)
-                                continue
-                            # Stay in the target directory (ensure_remote_dir leaves us there)
-                        else:
-                            ftp.cwd(remote_path)
-                        
-                        # Upload file
-                        remote_file = os.path.basename(relative_path)
-                        with open(local_path, 'rb') as f:
-                            ftp.storbinary(f'STOR {remote_file}', f)
-                        uploaded_count += 1
-                        
-                    except Exception as file_error:
-                        failed_files.append(relative_path)
-                        logger.warning(f"Failed to upload {relative_path}: {str(file_error)}")
-                
-                ftp.quit()
-                
-                # Prepare success message
-                success_msg = f"Deployed {uploaded_count}/{len(files_to_deploy)} files successfully"
-                if failed_files:
-                    success_msg += f" ({len(failed_files)} files failed)"
-                
-                await update_operation_status(op_obj.id, "success", success_msg)
-                
-                return {
-                    "success": True,
-                    "message": success_msg,
-                    "operation_id": op_obj.id,
-                    "details": {
-                        "uploaded": uploaded_count,
-                        "total": len(files_to_deploy),
-                        "failed": len(failed_files),
-                        "project_type": project_type
-                    }
-                }
-                
-            except Exception as ftp_error:
-                error_msg = f"FTP deployment failed: {str(ftp_error)}"
-                logger.error(error_msg)
-                await update_operation_status(op_obj.id, "failed", error_msg)
-                raise ValueError(error_msg)
-            
-        elif deploy_type == 'cpanel':
-            # cPanel deployment via API (simplified mock for MVP)
-            host = config.get('host')
-            username = config.get('username')
-            api_token = config.get('api_token')
-            
-            # This is a placeholder - actual cPanel API would require more complex integration
-            success_msg = f"cPanel deployment initiated for {host} (Note: Full cPanel integration coming soon)"
-            await update_operation_status(op_obj.id, "success", success_msg)
-            
-            return {
-                "success": True,
-                "message": success_msg,
-                "operation_id": op_obj.id
-            }
-        
-        else:
-            raise ValueError(f"Unknown deployment type: {deploy_type}")
-    except ValueError as e:
-        await update_operation_status(op_obj.id, "failed", str(e))
-        raise HTTPException(status_code=400, detail=str(e))
+        pool = await get_pool()
+        if not pool:
+            raise HTTPException(status_code=500, detail="Database not connected")
+        async with pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute("DELETE FROM deployment_configs WHERE id = %s", (config_id,))
+                if cur.rowcount == 0:
+                    raise HTTPException(status_code=404, detail="Deployment config not found")
+        return {"message": "Deployment config deleted successfully"}
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error deploying: {str(e)}")
-        error_msg = "Deployment failed. Please check your configuration and credentials."
-        await update_operation_status(op_obj.id, "failed", error_msg)
-        raise HTTPException(status_code=500, detail=error_msg)
+        logger.error(f"Error deleting deployment config: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-# ============= Test Connection Endpoints =============
+# ============= Deployment Preview (NEW) =============
 
-@api_router.post("/test-git-connection")
-async def test_git_connection(request: TestConnectionRequest):
-    """Test Git repository connection and authentication"""
+@api_router.post("/repos/{repo_id}/preview-deploy")
+async def preview_deployment(repo_id: str):
+    """Preview files that will be deployed before actual deployment"""
+    repo = await get_repo_data(repo_id)
+    
+    pool = await get_pool()
+    if not pool:
+        raise HTTPException(status_code=500, detail="Database not connected")
+    
+    async with pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute("SELECT * FROM deployment_configs WHERE repo_id = %s", (repo_id,))
+            deploy_config = await cur.fetchone()
+            if not deploy_config:
+                raise HTTPException(status_code=404, detail="Deployment config not found for this repository")
+    
     try:
         temp_dir = tempfile.mkdtemp()
+        auth_url = get_auth_url(repo['url'], repo['provider'], repo['auth_type'], {'token': repo['auth_token'], 'username': repo['auth_username']})
         
-        # Build authenticated URL
-        auth_url = get_auth_url(
-            request.url,
-            request.provider,
-            request.auth_type,
-            request.auth_data
-        )
-        
-        # Try to clone with depth=1 for faster testing
+        logger.info("Cloning repository for preview...")
         git.Repo.clone_from(auth_url, temp_dir, depth=1)
         
-        # Clean up
+        project_type = deploy_config['project_type'] or 'static'
+        deploy_dir = temp_dir
+        
+        # Build project if needed
+        if project_type in ['react', 'angular', 'vue', 'nextjs']:
+            logger.info(f"Building {project_type} project...")
+            deploy_dir = build_project(temp_dir, project_type)
+        
+        # Get files to deploy
+        files = get_files_to_deploy(deploy_dir, project_type)
+        
+        # Calculate totals
+        total_size = sum(f['size'] for f in files)
+        directories = sorted(set(os.path.dirname(f['relative_path']) for f in files if os.path.dirname(f['relative_path'])))
+        
+        # Cleanup
         shutil.rmtree(temp_dir, ignore_errors=True)
         
         return {
             "success": True,
-            "message": "Successfully connected to repository! Authentication verified."
-        }
-    except ValueError as e:
-        return {
-            "success": False,
-            "message": str(e)
-        }
-    except git.exc.GitCommandError as e:
-        error_msg = str(e)
-        if 'authentication failed' in error_msg.lower() or 'could not read' in error_msg.lower():
-            message = "Authentication failed. Please verify your access token or credentials."
-        elif 'repository not found' in error_msg.lower():
-            message = "Repository not found. Check the URL and your access permissions."
-        elif 'could not resolve host' in error_msg.lower():
-            message = "Could not connect to Git server. Please verify the repository URL."
-        else:
-            message = f"Connection test failed: {error_msg}"
-        
-        return {
-            "success": False,
-            "message": message
+            "preview": {
+                "total_files": len(files),
+                "total_size": format_size(total_size),
+                "total_size_bytes": total_size,
+                "project_type": project_type,
+                "deploy_type": deploy_config['deploy_type'],
+                "target_host": deploy_config['host'],
+                "target_path": deploy_config['remote_path'],
+                "directories": directories,
+                "files": sorted([{
+                    "path": f['relative_path'],
+                    "size": format_size(f['size']),
+                    "size_bytes": f['size']
+                } for f in files], key=lambda x: x['path'])
+            }
         }
     except Exception as e:
-        logger.error(f"Error testing Git connection: {str(e)}")
-        return {
-            "success": False,
-            "message": f"Connection test failed: {str(e)}"
-        }
+        logger.error(f"Preview error: {e}")
+        raise HTTPException(status_code=400, detail=f"Preview failed: {str(e)}")
+
+# ============= Deploy =============
+
+@api_router.post("/repos/{repo_id}/deploy")
+async def deploy_repository(repo_id: str, request: DeployRequest):
+    repo = await get_repo_data(repo_id)
+    
+    pool = await get_pool()
+    if not pool:
+        raise HTTPException(status_code=500, detail="Database not connected")
+    
+    async with pool.acquire() as conn:
+        async with conn.cursor(aiomysql.DictCursor) as cur:
+            await cur.execute("SELECT * FROM deployment_configs WHERE repo_id = %s", (repo_id,))
+            deploy_config = await cur.fetchone()
+            if not deploy_config:
+                raise HTTPException(status_code=404, detail="Deployment config not found")
+    
+    op_id = await create_operation(repo_id, 'deploy', request.branch_name, 'pending', f'Deploying to {deploy_config["deploy_type"]}')
+    
+    try:
+        temp_dir = tempfile.mkdtemp()
+        auth_url = get_auth_url(repo['url'], repo['provider'], repo['auth_type'], {'token': repo['auth_token'], 'username': repo['auth_username']})
+        
+        logger.info("Cloning repository...")
+        git_repo = git.Repo.clone_from(auth_url, temp_dir, depth=1)
+        
+        if request.branch_name:
+            git_repo.git.checkout(request.branch_name)
+        
+        project_type = deploy_config['project_type'] or 'static'
+        deploy_dir = temp_dir
+        
+        # Build project if needed
+        if project_type in ['react', 'angular', 'vue', 'nextjs']:
+            logger.info(f"Building {project_type} project...")
+            deploy_dir = build_project(temp_dir, project_type)
+        
+        # Get files
+        files = get_files_to_deploy(deploy_dir, project_type)
+        if not files:
+            raise ValueError("No files found to deploy")
+        
+        # FTP Deployment
+        if deploy_config['deploy_type'] == 'ftp':
+            if deploy_config['use_tls']:
+                ftp = FTP_TLS(deploy_config['host'], timeout=30)
+            else:
+                ftp = FTP(deploy_config['host'], timeout=30)
+            
+            ftp.login(deploy_config['username'], deploy_config['password'])
+            
+            remote_path = deploy_config['remote_path'] or '/'
+            try:
+                ftp.cwd(remote_path)
+            except:
+                ftp.mkd(remote_path)
+                ftp.cwd(remote_path)
+            
+            uploaded_count = 0
+            failed_files = []
+            created_dirs = set()
+            
+            for file_info in files:
+                try:
+                    relative_path = file_info['relative_path']
+                    local_path = file_info['local_path']
+                    remote_dir = os.path.dirname(relative_path)
+                    
+                    # Create directory structure
+                    if remote_dir and remote_dir != '.':
+                        dirs = remote_dir.split('/')
+                        ftp.cwd(remote_path)
+                        current = remote_path.rstrip('/')
+                        
+                        for d in dirs:
+                            if d:
+                                current = f"{current}/{d}"
+                                if current not in created_dirs:
+                                    try:
+                                        ftp.cwd(d)
+                                    except:
+                                        ftp.mkd(d)
+                                        ftp.cwd(d)
+                                    created_dirs.add(current)
+                    else:
+                        ftp.cwd(remote_path)
+                    
+                    # Upload file
+                    with open(local_path, 'rb') as f:
+                        ftp.storbinary(f'STOR {os.path.basename(relative_path)}', f)
+                    uploaded_count += 1
+                    
+                except Exception as file_error:
+                    failed_files.append(relative_path)
+                    logger.warning(f"Failed to upload {relative_path}: {file_error}")
+            
+            ftp.quit()
+            
+            message = f"Deployed {uploaded_count}/{len(files)} files successfully"
+            if failed_files:
+                message += f" ({len(failed_files)} files failed)"
+            
+            await update_operation(op_id, 'success', message)
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            
+            return {
+                "success": True,
+                "message": message,
+                "operation_id": op_id,
+                "details": {
+                    "uploaded": uploaded_count,
+                    "total": len(files),
+                    "failed": len(failed_files),
+                    "project_type": project_type
+                }
+            }
+        
+        elif deploy_config['deploy_type'] == 'cpanel':
+            message = f"cPanel deployment initiated for {deploy_config['host']} (Full cPanel integration coming soon)"
+            await update_operation(op_id, 'success', message)
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            return {"success": True, "message": message, "operation_id": op_id}
+        
+        else:
+            raise ValueError(f"Unknown deployment type: {deploy_config['deploy_type']}")
+    
+    except Exception as e:
+        await update_operation(op_id, 'failed', str(e))
+        raise HTTPException(status_code=400, detail=str(e))
+
+# ============= Test Connections =============
+
+@api_router.post("/test-git-connection")
+async def test_git_connection(request: TestConnectionRequest):
+    try:
+        temp_dir = tempfile.mkdtemp()
+        auth_url = get_auth_url(request.url, request.provider, request.auth_type, request.auth_data)
+        
+        git.Repo.clone_from(auth_url, temp_dir, depth=1)
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        
+        return {"success": True, "message": "Successfully connected to repository! Authentication verified."}
+    except Exception as e:
+        error_msg = str(e).lower()
+        if 'authentication' in error_msg or 'could not read' in error_msg:
+            message = "Authentication failed. Please verify your access token or credentials."
+        elif 'not found' in error_msg:
+            message = "Repository not found. Check the URL and your access permissions."
+        elif 'resolve host' in error_msg:
+            message = "Could not connect to Git server. Please verify the repository URL."
+        else:
+            message = f"Connection test failed: {str(e)}"
+        return {"success": False, "message": message}
 
 @api_router.post("/test-ftp-connection")
 async def test_ftp_connection(request: TestFTPRequest):
-    """Test FTP server connection"""
     try:
         if request.use_tls:
             ftp = FTP_TLS(request.host, timeout=10)
@@ -921,32 +784,27 @@ async def test_ftp_connection(request: TestFTPRequest):
             ftp = FTP(request.host, timeout=10)
         
         ftp.login(request.username, request.password)
-        
-        # Get welcome message
         welcome = ftp.getwelcome()
-        
         ftp.quit()
         
-        return {
-            "success": True,
-            "message": f"Successfully connected to FTP server! {welcome}"
-        }
+        return {"success": True, "message": f"Successfully connected to FTP server! {welcome}"}
     except Exception as e:
         error_msg = str(e)
-        if 'authentication failed' in error_msg.lower() or '530' in error_msg:
+        if '530' in error_msg or 'authentication' in error_msg.lower():
             message = "Authentication failed. Please verify your username and password."
         elif 'timed out' in error_msg.lower():
             message = "Connection timed out. Please verify the host address."
         else:
             message = f"FTP connection test failed: {error_msg}"
-        
-        logger.error(f"Error testing FTP connection: {str(e)}")
-        return {
-            "success": False,
-            "message": message
-        }
+        return {"success": False, "message": message}
 
-# Include the router in the main app
+# ============= Health Check =============
+
+@api_router.get("/health")
+async def health_check():
+    return {"status": "ok", "timestamp": datetime.now(timezone.utc).isoformat()}
+
+# Include router and middleware
 app.include_router(api_router)
 
 app.add_middleware(
@@ -958,5 +816,8 @@ app.add_middleware(
 )
 
 @app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()
+async def shutdown():
+    global pool
+    if pool:
+        pool.close()
+        await pool.wait_closed()
