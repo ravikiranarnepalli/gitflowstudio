@@ -366,10 +366,19 @@ async def merge_branches(repo_id: str, request: MergeRequest):
         git_repo = get_git_repo(repo)
         
         # Checkout target branch
-        git_repo.git.checkout(request.target_branch)
+        try:
+            git_repo.git.checkout(request.target_branch)
+        except git.exc.GitCommandError:
+            raise ValueError(f"Target branch '{request.target_branch}' does not exist.")
         
         # Merge source branch
-        git_repo.git.merge(request.source_branch)
+        try:
+            git_repo.git.merge(request.source_branch)
+        except git.exc.GitCommandError as e:
+            if 'conflict' in str(e).lower():
+                raise ValueError(f"Merge conflict detected. Please resolve conflicts manually.")
+            else:
+                raise ValueError(f"Source branch '{request.source_branch}' not found or cannot be merged.")
         
         # Push merged changes
         origin = git_repo.remote('origin')
@@ -383,10 +392,14 @@ async def merge_branches(repo_id: str, request: MergeRequest):
             "message": f"Merged {request.source_branch} into {request.target_branch} successfully",
             "operation_id": op_obj.id
         }
+    except ValueError as e:
+        await update_operation_status(op_obj.id, "failed", str(e))
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error merging branches: {str(e)}")
-        await update_operation_status(op_obj.id, "failed", str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        error_msg = "Merge failed. Please check your credentials and branch names."
+        await update_operation_status(op_obj.id, "failed", error_msg)
+        raise HTTPException(status_code=500, detail=error_msg)
 
 # ============= Deployment Endpoints =============
 
