@@ -210,22 +210,47 @@ def get_auth_url(url: str, provider: str, auth_type: str, auth_data: dict) -> st
 
 def build_project(repo_path: str, project_type: str) -> str:
     """Build the project and return the deployment directory"""
+    import subprocess
+    
     logger.info(f"Building {project_type} project at {repo_path}")
     
     if project_type in ['react', 'vue', 'nextjs']:
         # Frontend build process
         build_dir = os.path.join(repo_path, 'build')
         
-        # Check if it's a React app
-        if os.path.exists(os.path.join(repo_path, 'package.json')):
+        # Check if it's a frontend app
+        package_json_path = os.path.join(repo_path, 'package.json')
+        if not os.path.exists(package_json_path):
+            raise ValueError("No package.json found. Cannot build frontend project.")
+        
+        try:
             # Install dependencies
-            os.system(f'cd {repo_path} && npm install --production')
+            logger.info("Installing dependencies...")
+            install_result = subprocess.run(
+                ['npm', 'install', '--legacy-peer-deps'],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                timeout=300
+            )
+            
+            if install_result.returncode != 0:
+                logger.error(f"npm install failed: {install_result.stderr}")
+                raise ValueError(f"Dependency installation failed: {install_result.stderr[:200]}")
             
             # Run build
-            build_result = os.system(f'cd {repo_path} && npm run build')
+            logger.info("Running build command...")
+            build_result = subprocess.run(
+                ['npm', 'run', 'build'],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                timeout=600
+            )
             
-            if build_result != 0:
-                raise ValueError("Build failed. Please check your build configuration.")
+            if build_result.returncode != 0:
+                logger.error(f"Build failed: {build_result.stderr}")
+                raise ValueError(f"Build failed: {build_result.stderr[:300]}")
             
             # Check for build output
             if os.path.exists(build_dir):
@@ -233,20 +258,60 @@ def build_project(repo_path: str, project_type: str) -> str:
             elif os.path.exists(os.path.join(repo_path, 'dist')):
                 return os.path.join(repo_path, 'dist')
             else:
-                raise ValueError("Build completed but output directory not found")
-        else:
-            raise ValueError("No package.json found. Cannot build frontend project.")
+                raise ValueError("Build completed but output directory not found (expected 'build' or 'dist')")
+                
+        except subprocess.TimeoutExpired:
+            raise ValueError("Build process timed out. Your project might be too large or build is stuck.")
+        except FileNotFoundError:
+            raise ValueError("npm not found. Please ensure Node.js is installed on the server.")
     
     elif project_type == 'angular':
         # Angular build
         dist_dir = os.path.join(repo_path, 'dist')
         
-        if os.path.exists(os.path.join(repo_path, 'package.json')):
-            os.system(f'cd {repo_path} && npm install --production')
-            build_result = os.system(f'cd {repo_path} && npm run build')
+        package_json_path = os.path.join(repo_path, 'package.json')
+        if not os.path.exists(package_json_path):
+            raise ValueError("No package.json found. Cannot build Angular project.")
+        
+        try:
+            # Install dependencies including Angular CLI
+            logger.info("Installing Angular dependencies...")
+            install_result = subprocess.run(
+                ['npm', 'install', '--legacy-peer-deps'],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                timeout=300
+            )
             
-            if build_result != 0:
-                raise ValueError("Angular build failed")
+            if install_result.returncode != 0:
+                logger.error(f"npm install failed: {install_result.stderr}")
+                raise ValueError(f"Dependency installation failed: {install_result.stderr[:200]}")
+            
+            # Run Angular build using npx
+            logger.info("Running Angular build...")
+            build_result = subprocess.run(
+                ['npx', 'ng', 'build', '--configuration=production'],
+                cwd=repo_path,
+                capture_output=True,
+                text=True,
+                timeout=600
+            )
+            
+            if build_result.returncode != 0:
+                # Try with npm run build as fallback
+                logger.info("Trying npm run build as fallback...")
+                build_result = subprocess.run(
+                    ['npm', 'run', 'build'],
+                    cwd=repo_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=600
+                )
+                
+                if build_result.returncode != 0:
+                    logger.error(f"Angular build failed: {build_result.stderr}")
+                    raise ValueError(f"Angular build failed: {build_result.stderr[:300]}")
             
             # Angular creates dist/project-name folder
             if os.path.exists(dist_dir):
@@ -257,11 +322,39 @@ def build_project(repo_path: str, project_type: str) -> str:
                 return dist_dir
             else:
                 raise ValueError("Build completed but dist directory not found")
-        else:
-            raise ValueError("No package.json found")
+                
+        except subprocess.TimeoutExpired:
+            raise ValueError("Build process timed out. Angular build might be too large or stuck.")
+        except FileNotFoundError:
+            raise ValueError("npm/npx not found. Please ensure Node.js is installed on the server.")
     
     elif project_type == 'nodejs':
-        # Node.js - deploy source but exclude node_modules
+        # Node.js - check if build script exists
+        package_json_path = os.path.join(repo_path, 'package.json')
+        if os.path.exists(package_json_path):
+            try:
+                with open(package_json_path, 'r') as f:
+                    package_data = json.load(f)
+                    scripts = package_data.get('scripts', {})
+                    
+                    # If build script exists, run it
+                    if 'build' in scripts:
+                        logger.info("Running Node.js build script...")
+                        subprocess.run(
+                            ['npm', 'install', '--production'],
+                            cwd=repo_path,
+                            capture_output=True,
+                            timeout=300
+                        )
+                        subprocess.run(
+                            ['npm', 'run', 'build'],
+                            cwd=repo_path,
+                            capture_output=True,
+                            timeout=300
+                        )
+            except Exception as e:
+                logger.warning(f"Build script execution warning: {str(e)}")
+        
         return repo_path
     
     elif project_type == 'python':
