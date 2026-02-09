@@ -160,6 +160,23 @@ const DeploymentConfig = () => {
     }
   };
 
+  const handlePreview = async (config) => {
+    setPreviewingId(config.id);
+    toast.loading('Generating deployment preview...', { id: 'preview-toast' });
+    
+    try {
+      const response = await axios.post(`${API}/repos/${config.repo_id}/preview-deploy`, {});
+      setPreviewData(response.data.preview);
+      setShowPreviewDialog(true);
+      toast.success('Preview generated!', { id: 'preview-toast' });
+    } catch (error) {
+      console.error('Error generating preview:', error);
+      toast.error(error.response?.data?.detail || 'Failed to generate preview', { id: 'preview-toast' });
+    } finally {
+      setPreviewingId(null);
+    }
+  };
+
   const getRepoName = (repoId) => {
     const repo = repos.find(r => r.id === repoId);
     return repo ? repo.name : 'Unknown';
