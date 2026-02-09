@@ -311,7 +311,10 @@ async def push_to_branch(repo_id: str, request: PushRequest):
         git_repo = get_git_repo(repo)
         
         # Checkout the branch
-        git_repo.git.checkout(request.branch_name)
+        try:
+            git_repo.git.checkout(request.branch_name)
+        except git.exc.GitCommandError:
+            raise ValueError(f"Branch '{request.branch_name}' does not exist. Please create it first.")
         
         # Stage all changes
         git_repo.git.add(A=True)
@@ -331,10 +334,14 @@ async def push_to_branch(repo_id: str, request: PushRequest):
             "message": f"Pushed to {request.branch_name} successfully",
             "operation_id": op_obj.id
         }
+    except ValueError as e:
+        await update_operation_status(op_obj.id, "failed", str(e))
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error pushing to branch: {str(e)}")
-        await update_operation_status(op_obj.id, "failed", str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        error_msg = "Push failed. Please check your credentials and branch name."
+        await update_operation_status(op_obj.id, "failed", error_msg)
+        raise HTTPException(status_code=500, detail=error_msg)
 
 @api_router.post("/repos/{repo_id}/merge")
 async def merge_branches(repo_id: str, request: MergeRequest):
