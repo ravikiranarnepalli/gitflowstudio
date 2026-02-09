@@ -578,6 +578,22 @@ async def deploy_repository(repo_id: str, request: DeployRequest):
             git_repo.git.checkout(request.branch_name)
         
         repo_path = git_repo.working_dir
+        project_type = deploy_config.get('project_type', 'static')
+        
+        # Build the project if needed
+        try:
+            deploy_dir = build_project(repo_path, project_type)
+            logger.info(f"Build completed. Deploy directory: {deploy_dir}")
+        except ValueError as build_error:
+            error_msg = f"Build failed: {str(build_error)}"
+            await update_operation_status(op_obj.id, "failed", error_msg)
+            raise ValueError(error_msg)
+        
+        # Get files to deploy
+        files_to_deploy = get_files_to_deploy(deploy_dir, project_type)
+        
+        if not files_to_deploy:
+            raise ValueError("No files found to deploy after build")
         
         deploy_type = deploy_config['deploy_type']
         config = deploy_config['config']
