@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Rocket, Trash2, Server, HardDrive, Edit } from 'lucide-react';
+import { Plus, Rocket, Trash2, Server, HardDrive, Edit, Eye, FileText, Folder, X } from 'lucide-react';
 import axios from 'axios';
 import { toast } from 'sonner';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
@@ -19,6 +19,9 @@ const DeploymentConfig = () => {
   const [testingFTP, setTestingFTP] = useState(false);
   const [deployingId, setDeployingId] = useState(null);
   const [editingConfig, setEditingConfig] = useState(null);
+  const [previewingId, setPreviewingId] = useState(null);
+  const [previewData, setPreviewData] = useState(null);
+  const [showPreviewDialog, setShowPreviewDialog] = useState(false);
 
   const [newConfig, setNewConfig] = useState({
     repo_id: '',
