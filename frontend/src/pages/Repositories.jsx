@@ -71,7 +71,35 @@ const Repositories = () => {
       });
     } catch (error) {
       console.error('Error adding repo:', error);
-      toast.error('Failed to add repository');
+      toast.error(error.response?.data?.detail || 'Failed to add repository');
+    }
+  };
+
+  const handleTestConnection = async () => {
+    if (!newRepo.url || !newRepo.auth_data.token) {
+      toast.error('Please fill in repository URL and access token');
+      return;
+    }
+
+    setTestingConnection(true);
+    try {
+      const response = await axios.post(`${API}/test-git-connection`, {
+        provider: newRepo.provider,
+        url: newRepo.url,
+        auth_type: newRepo.auth_type,
+        auth_data: newRepo.auth_data
+      });
+
+      if (response.data.success) {
+        toast.success(response.data.message);
+      } else {
+        toast.error(response.data.message);
+      }
+    } catch (error) {
+      console.error('Error testing connection:', error);
+      toast.error('Connection test failed');
+    } finally {
+      setTestingConnection(false);
     }
   };
 
