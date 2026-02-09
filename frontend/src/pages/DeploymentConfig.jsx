@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Rocket, Trash2, Server, HardDrive } from 'lucide-react';
+import { Plus, Rocket, Trash2, Server, HardDrive, Edit } from 'lucide-react';
 import axios from 'axios';
 import { toast } from 'sonner';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
