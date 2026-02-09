@@ -741,36 +741,56 @@ async def deploy_repository(repo_id: str, request: DeployRequest):
                 
                 uploaded_count = 0
                 failed_files = []
+                created_dirs = set()  # Track already created directories
                 
-                # Helper function to create remote directory
-                def ensure_remote_dir(ftp, path):
-                    dirs = path.split('/')
-                    current = ''
+                # Helper function to create remote directory recursively
+                def ensure_remote_dir(ftp, base_path, rel_dir):
+                    """Create remote directory structure from base_path"""
+                    if not rel_dir or rel_dir in created_dirs:
+                        return True
+                    
+                    # Normalize path separators
+                    rel_dir = rel_dir.replace(os.sep, '/')
+                    dirs = [d for d in rel_dir.split('/') if d]
+                    
+                    # Start from base path
+                    try:
+                        ftp.cwd(base_path)
+                    except:
+                        return False
+                    
+                    # Create each directory level
+                    current_path = base_path.rstrip('/')
                     for d in dirs:
-                        if d:
-                            current += '/' + d if current else d
+                        current_path = f"{current_path}/{d}"
+                        if current_path not in created_dirs:
                             try:
-                                ftp.cwd(current)
+                                ftp.cwd(d)
                             except:
                                 try:
-                                    ftp.mkd(current)
-                                    ftp.cwd(current)
-                                except:
-                                    pass
-                    # Return to remote root
-                    ftp.cwd(remote_path)
+                                    ftp.mkd(d)
+                                    ftp.cwd(d)
+                                    created_dirs.add(current_path)
+                                except Exception as e:
+                                    logger.warning(f"Failed to create directory {current_path}: {e}")
+                                    return False
+                    
+                    created_dirs.add(rel_dir)
+                    return True
                 
                 # Upload each file
                 for local_path, relative_path in files_to_deploy:
                     try:
-                        # Create directory structure if needed
-                        remote_dir = os.path.dirname(relative_path)
-                        if remote_dir:
-                            ensure_remote_dir(ftp, remote_dir)
+                        # Normalize path
+                        relative_path_normalized = relative_path.replace(os.sep, '/')
+                        remote_dir = os.path.dirname(relative_path_normalized)
                         
-                        # Change to the correct directory
+                        # Create directory structure if needed
                         if remote_dir:
-                            ftp.cwd(remote_path + '/' + remote_dir.replace(os.sep, '/'))
+                            if not ensure_remote_dir(ftp, remote_path, remote_dir):
+                                failed_files.append(relative_path)
+                                continue
+                            # Stay in the target directory (ensure_remote_dir leaves us there)
                         else:
                             ftp.cwd(remote_path)
                         
@@ -779,9 +799,6 @@ async def deploy_repository(repo_id: str, request: DeployRequest):
                         with open(local_path, 'rb') as f:
                             ftp.storbinary(f'STOR {remote_file}', f)
                         uploaded_count += 1
-                        
-                        # Return to root
-                        ftp.cwd(remote_path)
                         
                     except Exception as file_error:
                         failed_files.append(relative_path)
