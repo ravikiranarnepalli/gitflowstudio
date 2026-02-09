@@ -83,7 +83,7 @@ class DeploymentConfig(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     repo_id: str
     deploy_type: str  # ftp, cpanel
-    project_type: str  # react, angular, vue, nodejs, python, static
+    project_type: str = "static"  # react, angular, vue, nodejs, python, static
     config: Dict[str, Any]  # host, username, password, path, etc.
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
