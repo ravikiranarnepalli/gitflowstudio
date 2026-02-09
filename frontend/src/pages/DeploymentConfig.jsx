@@ -535,6 +535,123 @@ const DeploymentConfig = () => {
           </div>
         )}
       </div>
+
+      {/* Preview Dialog */}
+      <Dialog open={showPreviewDialog} onOpenChange={setShowPreviewDialog}>
+        <DialogContent className="bg-card border-border max-w-4xl max-h-[85vh] overflow-hidden flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="font-mono flex items-center gap-2">
+              <Eye className="w-5 h-5" />
+              Deployment Preview
+            </DialogTitle>
+          </DialogHeader>
+          
+          {previewData && (
+            <div className="flex-1 overflow-hidden flex flex-col">
+              {/* Summary Stats */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                <div className="bg-accent/50 rounded-lg p-3 text-center">
+                  <div className="text-2xl font-bold text-primary">{previewData.total_files}</div>
+                  <div className="text-xs text-muted-foreground">Total Files</div>
+                </div>
+                <div className="bg-accent/50 rounded-lg p-3 text-center">
+                  <div className="text-2xl font-bold text-blue-400">{previewData.total_size}</div>
+                  <div className="text-xs text-muted-foreground">Total Size</div>
+                </div>
+                <div className="bg-accent/50 rounded-lg p-3 text-center">
+                  <div className="text-2xl font-bold text-green-400">{previewData.directories?.length || 0}</div>
+                  <div className="text-xs text-muted-foreground">Directories</div>
+                </div>
+                <div className="bg-accent/50 rounded-lg p-3 text-center">
+                  <div className="text-2xl font-bold text-amber-400">{previewData.project_type?.toUpperCase()}</div>
+                  <div className="text-xs text-muted-foreground">Project Type</div>
+                </div>
+              </div>
+
+              {/* Target Info */}
+              <div className="bg-accent/30 rounded-lg p-3 mb-4">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">Deploy to:</span>
+                  <span className="font-mono text-primary">{previewData.target_host}{previewData.target_path}</span>
+                </div>
+              </div>
+
+              {/* Directories */}
+              {previewData.directories && previewData.directories.length > 0 && (
+                <div className="mb-4">
+                  <h4 className="text-sm font-semibold mb-2 flex items-center gap-2">
+                    <Folder className="w-4 h-4 text-amber-400" />
+                    Directories to Create ({previewData.directories.length})
+                  </h4>
+                  <div className="flex flex-wrap gap-2">
+                    {previewData.directories.slice(0, 10).map((dir, idx) => (
+                      <span key={idx} className="text-xs bg-accent px-2 py-1 rounded font-mono">
+                        {dir}
+                      </span>
+                    ))}
+                    {previewData.directories.length > 10 && (
+                      <span className="text-xs text-muted-foreground">
+                        +{previewData.directories.length - 10} more
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Files List */}
+              <div className="flex-1 overflow-hidden flex flex-col">
+                <h4 className="text-sm font-semibold mb-2 flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-blue-400" />
+                  Files to Upload ({previewData.files?.length || 0})
+                </h4>
+                <div className="flex-1 overflow-y-auto bg-background/50 rounded-lg border border-border">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0 bg-card border-b border-border">
+                      <tr>
+                        <th className="text-left p-2 font-medium">File Path</th>
+                        <th className="text-right p-2 font-medium w-24">Size</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border/50">
+                      {previewData.files?.map((file, idx) => (
+                        <tr key={idx} className="hover:bg-accent/30">
+                          <td className="p-2 font-mono text-xs truncate max-w-md" title={file.path}>
+                            {file.path}
+                          </td>
+                          <td className="p-2 text-right text-xs text-muted-foreground">
+                            {file.size}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex gap-3 mt-4 pt-4 border-t border-border">
+                <Button
+                  onClick={() => setShowPreviewDialog(false)}
+                  className="btn-secondary flex-1"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={() => {
+                    setShowPreviewDialog(false);
+                    const config = configs.find(c => c.repo_id === previewData.repo_id) || configs[0];
+                    if (config) handleDeploy(config);
+                  }}
+                  className="btn-primary flex-1 flex items-center justify-center gap-2"
+                >
+                  <Rocket className="w-4 h-4" />
+                  Deploy Now
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
