@@ -208,6 +208,121 @@ def get_auth_url(url: str, provider: str, auth_type: str, auth_data: dict) -> st
     else:
         return url
 
+def build_project(repo_path: str, project_type: str) -> str:
+    """Build the project and return the deployment directory"""
+    logger.info(f"Building {project_type} project at {repo_path}")
+    
+    if project_type in ['react', 'vue', 'nextjs']:
+        # Frontend build process
+        build_dir = os.path.join(repo_path, 'build')
+        
+        # Check if it's a React app
+        if os.path.exists(os.path.join(repo_path, 'package.json')):
+            # Install dependencies
+            os.system(f'cd {repo_path} && npm install --production')
+            
+            # Run build
+            build_result = os.system(f'cd {repo_path} && npm run build')
+            
+            if build_result != 0:
+                raise ValueError("Build failed. Please check your build configuration.")
+            
+            # Check for build output
+            if os.path.exists(build_dir):
+                return build_dir
+            elif os.path.exists(os.path.join(repo_path, 'dist')):
+                return os.path.join(repo_path, 'dist')
+            else:
+                raise ValueError("Build completed but output directory not found")
+        else:
+            raise ValueError("No package.json found. Cannot build frontend project.")
+    
+    elif project_type == 'angular':
+        # Angular build
+        dist_dir = os.path.join(repo_path, 'dist')
+        
+        if os.path.exists(os.path.join(repo_path, 'package.json')):
+            os.system(f'cd {repo_path} && npm install --production')
+            build_result = os.system(f'cd {repo_path} && npm run build')
+            
+            if build_result != 0:
+                raise ValueError("Angular build failed")
+            
+            # Angular creates dist/project-name folder
+            if os.path.exists(dist_dir):
+                # Find the actual build folder inside dist
+                subdirs = [d for d in os.listdir(dist_dir) if os.path.isdir(os.path.join(dist_dir, d))]
+                if subdirs:
+                    return os.path.join(dist_dir, subdirs[0])
+                return dist_dir
+            else:
+                raise ValueError("Build completed but dist directory not found")
+        else:
+            raise ValueError("No package.json found")
+    
+    elif project_type == 'nodejs':
+        # Node.js - deploy source but exclude node_modules
+        return repo_path
+    
+    elif project_type == 'python':
+        # Python - deploy source code
+        return repo_path
+    
+    elif project_type == 'static':
+        # Static HTML/CSS/JS - deploy as is
+        return repo_path
+    
+    else:
+        # Unknown type, deploy everything
+        return repo_path
+
+def get_files_to_deploy(deploy_dir: str, project_type: str):
+    """Get list of files to deploy based on project type"""
+    files_to_deploy = []
+    
+    # Files/folders to exclude based on project type
+    exclude_patterns = {
+        'react': ['.git', 'node_modules', 'src', 'public', 'tests', 'test', '.env', '.env.local', 
+                  'package.json', 'package-lock.json', 'yarn.lock', 'tsconfig.json', 'README.md'],
+        'angular': ['.git', 'node_modules', 'src', 'tests', 'test', '.env', 'package.json', 
+                    'angular.json', 'tsconfig.json', 'README.md'],
+        'vue': ['.git', 'node_modules', 'src', 'public', 'tests', 'test', '.env', 'package.json', 
+                'vue.config.js', 'README.md'],
+        'nextjs': ['.git', 'node_modules', 'pages', 'components', 'public', '.env', 'package.json', 
+                   'next.config.js', 'README.md'],
+        'nodejs': ['.git', 'node_modules', 'tests', 'test', '__tests__', '.env', '.env.example', 
+                   'README.md', '.gitignore', 'nodemon.json'],
+        'python': ['.git', 'venv', '__pycache__', '*.pyc', 'tests', 'test', '.env', '.env.example', 
+                   'README.md', '.gitignore', 'pytest.ini'],
+        'static': ['.git', 'node_modules', '.env', 'README.md', '.gitignore']
+    }
+    
+    excludes = exclude_patterns.get(project_type, ['.git', 'node_modules', '.env'])
+    
+    for root, dirs, files in os.walk(deploy_dir):
+        # Skip excluded directories
+        dirs[:] = [d for d in dirs if d not in excludes and not d.startswith('.')]
+        
+        for file in files:
+            # Skip excluded files and hidden files
+            should_skip = False
+            for pattern in excludes:
+                if pattern.startswith('*.'):
+                    # Pattern match
+                    if file.endswith(pattern[1:]):
+                        should_skip = True
+                        break
+                elif file == pattern or file.startswith('.'):
+                    should_skip = True
+                    break
+            
+            if not should_skip:
+                local_path = os.path.join(root, file)
+                relative_path = os.path.relpath(local_path, deploy_dir)
+                files_to_deploy.append((local_path, relative_path))
+    
+    return files_to_deploy
+
 def get_git_repo(repo_data: dict):
     """Clone or open a git repository based on repo data"""
     try:
