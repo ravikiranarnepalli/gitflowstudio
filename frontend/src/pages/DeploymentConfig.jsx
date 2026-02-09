@@ -61,6 +61,7 @@ const DeploymentConfig = () => {
       setNewConfig({
         repo_id: '',
         deploy_type: 'ftp',
+        project_type: 'react',
         config: {
           host: '',
           username: '',
