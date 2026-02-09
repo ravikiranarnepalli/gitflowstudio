@@ -509,10 +509,102 @@ async def deploy_repository(repo_id: str, request: DeployRequest):
             "message": f"Deployed successfully to {deploy_type}",
             "operation_id": op_obj.id
         }
+    except ValueError as e:
+        await update_operation_status(op_obj.id, "failed", str(e))
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Error deploying: {str(e)}")
-        await update_operation_status(op_obj.id, "failed", str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        error_msg = "Deployment failed. Please check your configuration and credentials."
+        await update_operation_status(op_obj.id, "failed", error_msg)
+        raise HTTPException(status_code=500, detail=error_msg)
+
+# ============= Test Connection Endpoints =============
+
+@api_router.post("/test-git-connection")
+async def test_git_connection(request: TestConnectionRequest):
+    """Test Git repository connection and authentication"""
+    try:
+        temp_dir = tempfile.mkdtemp()
+        
+        # Build authenticated URL
+        auth_url = get_auth_url(
+            request.url,
+            request.provider,
+            request.auth_type,
+            request.auth_data
+        )
+        
+        # Try to clone with depth=1 for faster testing
+        git.Repo.clone_from(auth_url, temp_dir, depth=1)
+        
+        # Clean up
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        
+        return {
+            "success": True,
+            "message": "Successfully connected to repository! Authentication verified."
+        }
+    except ValueError as e:
+        return {
+            "success": False,
+            "message": str(e)
+        }
+    except git.exc.GitCommandError as e:
+        error_msg = str(e)
+        if 'authentication failed' in error_msg.lower() or 'could not read' in error_msg.lower():
+            message = "Authentication failed. Please verify your access token or credentials."
+        elif 'repository not found' in error_msg.lower():
+            message = "Repository not found. Check the URL and your access permissions."
+        elif 'could not resolve host' in error_msg.lower():
+            message = "Could not connect to Git server. Please verify the repository URL."
+        else:
+            message = f"Connection test failed: {error_msg}"
+        
+        return {
+            "success": False,
+            "message": message
+        }
+    except Exception as e:
+        logger.error(f"Error testing Git connection: {str(e)}")
+        return {
+            "success": False,
+            "message": f"Connection test failed: {str(e)}"
+        }
+
+@api_router.post("/test-ftp-connection")
+async def test_ftp_connection(request: TestFTPRequest):
+    """Test FTP server connection"""
+    try:
+        if request.use_tls:
+            ftp = FTP_TLS(request.host, timeout=10)
+        else:
+            ftp = FTP(request.host, timeout=10)
+        
+        ftp.login(request.username, request.password)
+        
+        # Get welcome message
+        welcome = ftp.getwelcome()
+        
+        ftp.quit()
+        
+        return {
+            "success": True,
+            "message": f"Successfully connected to FTP server! {welcome}"
+        }
+    except Exception as e:
+        error_msg = str(e)
+        if 'authentication failed' in error_msg.lower() or '530' in error_msg:
+            message = "Authentication failed. Please verify your username and password."
+        elif 'timed out' in error_msg.lower():
+            message = "Connection timed out. Please verify the host address."
+        else:
+            message = f"FTP connection test failed: {error_msg}"
+        
+        logger.error(f"Error testing FTP connection: {str(e)}")
+        return {
+            "success": False,
+            "message": message
+        }
 
 # Include the router in the main app
 app.include_router(api_router)
