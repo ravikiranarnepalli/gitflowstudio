@@ -300,13 +300,36 @@ const DeploymentConfig = () => {
                     </>
                   )}
 
-                  <Button
-                    data-testid="save-deployment-btn"
-                    onClick={handleAddConfig}
-                    className="btn-primary w-full"
-                  >
-                    Save Configuration
-                  </Button>
+                  {newConfig.deploy_type === 'ftp' && (
+                    <div className="flex gap-2">
+                      <Button
+                        data-testid="test-ftp-btn"
+                        onClick={handleTestFTP}
+                        disabled={testingFTP || !newConfig.config.host}
+                        className="btn-secondary flex-1"
+                        type="button"
+                      >
+                        {testingFTP ? 'Testing...' : 'Test FTP Connection'}
+                      </Button>
+                      <Button
+                        data-testid="save-deployment-btn"
+                        onClick={handleAddConfig}
+                        className="btn-primary flex-1"
+                      >
+                        Save Configuration
+                      </Button>
+                    </div>
+                  )}
+
+                  {newConfig.deploy_type === 'cpanel' && (
+                    <Button
+                      data-testid="save-deployment-btn"
+                      onClick={handleAddConfig}
+                      className="btn-primary w-full"
+                    >
+                      Save Configuration
+                    </Button>
+                  )}
                 </div>
               </DialogContent>
             </Dialog>
