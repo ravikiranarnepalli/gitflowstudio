@@ -172,7 +172,24 @@ const DeploymentConfig = () => {
               <h1 className="text-4xl font-bold font-mono tracking-tight">Deployment</h1>
               <p className="text-sm text-muted-foreground mt-1">Configure deployment targets</p>
             </div>
-            <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
+            <Dialog open={showAddDialog} onOpenChange={(open) => {
+              setShowAddDialog(open);
+              if (!open) {
+                setEditingConfig(null);
+                setNewConfig({
+                  repo_id: '',
+                  deploy_type: 'ftp',
+                  project_type: 'react',
+                  config: {
+                    host: '',
+                    username: '',
+                    password: '',
+                    path: '/',
+                    use_tls: false
+                  }
+                });
+              }
+            }}>
               <DialogTrigger asChild>
                 <Button data-testid="add-deployment-btn" className="btn-primary flex items-center gap-2">
                   <Plus className="w-4 h-4" />
