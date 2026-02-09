@@ -18,6 +18,7 @@ const Repositories = () => {
   const [showOperationDialog, setShowOperationDialog] = useState(false);
   const [selectedRepo, setSelectedRepo] = useState(null);
   const [operationType, setOperationType] = useState('');
+  const [testingConnection, setTestingConnection] = useState(false);
 
   const [newRepo, setNewRepo] = useState({
     name: '',
