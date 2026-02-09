@@ -3,7 +3,7 @@
 ## Original Problem Statement
 Build a source control application with the following features:
 - When pushing to `main` branch, first create a new branch
-- Button to push code to newly created branch
+- Button to push code to newly created branch  
 - Button to merge branch into master branch
 - Button to publish/deploy code to server (cPanel or FTP)
 - **Git Providers**: GitHub, Bitbucket, GitLab
@@ -11,13 +11,14 @@ Build a source control application with the following features:
 - **Authentication**: Token-based and username/password
 - **UI/UX**: Modern dashboard with "code aesthetic"
 
-## Architecture
+## Current Architecture
 ```
 /app/
 ├── backend/
-│   ├── server.py         # FastAPI - all routes and business logic
+│   ├── server.py         # FastAPI with MySQL (aiomysql)
+│   ├── schema.sql        # MySQL database schema
 │   ├── requirements.txt
-│   └── .env
+│   └── .env              # MySQL connection config
 ├── frontend/
 │   ├── src/
 │   │   ├── components/   # Shadcn/UI components
@@ -27,11 +28,33 @@ Build a source control application with the following features:
 ```
 
 ## Tech Stack
-- **Backend**: FastAPI, Motor (async MongoDB), GitPython, Paramiko (SSH), ftplib
+- **Backend**: FastAPI (Python), aiomysql (async MySQL), GitPython, ftplib
 - **Frontend**: React, Tailwind CSS, Shadcn/UI, Lucide Icons, Sonner (toasts)
-- **Database**: MongoDB
+- **Database**: MySQL (user-provided remote database)
 
-## Implemented Features (✅ Complete)
+## Setup Instructions
+
+### 1. Run the SQL Schema on Your MySQL Server
+Copy the contents of `/app/backend/schema.sql` and run it on your remote MySQL database.
+
+### 2. Configure MySQL Connection
+Update `/app/backend/.env` with your MySQL credentials:
+```env
+MYSQL_HOST=your-mysql-host.com
+MYSQL_PORT=3306
+MYSQL_USER=your_username
+MYSQL_PASSWORD=your_password
+MYSQL_DATABASE=deployflow
+CORS_ORIGINS=*
+```
+
+### 3. Restart Backend
+After updating .env, restart the backend:
+```bash
+sudo supervisorctl restart backend
+```
+
+## Implemented Features
 
 ### Repository Management
 - Add repositories (GitHub, GitLab, Bitbucket)
@@ -42,7 +65,7 @@ Build a source control application with the following features:
 ### Git Operations
 - **Create Branch**: Create new branch from any base branch
 - **Push**: Stage, commit, and push changes to remote
-- **Merge**: Merge source branch into target branch with conflict detection
+- **Merge**: Merge source branch into target branch
 
 ### Deployment Configuration
 - CRUD for deployment configs (FTP/cPanel)
@@ -50,47 +73,66 @@ Build a source control application with the following features:
 - FTP connection testing
 - Edit and delete configurations
 
-### Smart Deployments (✅ Fixed Feb 9, 2026)
-- Automatic project build before deployment:
-  - React/Vue: `npm install && npm run build` → deploy `build/` or `dist/`
-  - Angular: `npm install && npx ng build` → deploy `dist/project-name/`
-  - Node.js: Optional build, exclude node_modules
-  - Python: Deploy source, exclude venv
-  - Static: Deploy as-is
-- **FTP nested directory creation** - Fixed bug where subdirectories weren't being created
+### Smart Deployments
+- Automatic project build before deployment
+- Supports: React, Angular, Vue, Next.js, Node.js, Python, Static
+
+### NEW: Deployment Preview
+- **Preview Button**: See all files that will be deployed before clicking "Deploy"
+- Shows: Total files, total size, directories to create, file list with sizes
+- Target server/path information
+- Option to deploy directly from preview dialog
 
 ### Operations Tracking
 - Full history of all Git and deployment operations
 - Status tracking: pending, success, failed
-- Detailed error messages
 
-## Bug Fixes Log
+## Database Schema (MySQL)
 
-### Feb 9, 2026 - FTP Directory Creation Bug
-**Issue**: Angular deployments were failing to upload files in nested directories (e.g., `browser/media/`, `browser/contact-us/`)
-**Root Cause**: The `ensure_remote_dir` function wasn't properly creating nested FTP directories
-**Fix**: Rewrote the directory creation logic to:
-1. Track already-created directories to avoid redundant operations
-2. Properly navigate from base path when creating subdirectories
-3. Stay in target directory after creation for immediate file upload
-**Result**: 92/92 files now upload successfully (was 77/92)
+```sql
+-- repositories
+CREATE TABLE repositories (
+    id VARCHAR(36) PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    provider ENUM('github', 'gitlab', 'bitbucket') NOT NULL,
+    url VARCHAR(500) NOT NULL,
+    auth_type ENUM('pat', 'ssh', 'oauth') NOT NULL,
+    auth_token VARCHAR(500),
+    auth_username VARCHAR(255),
+    default_branch VARCHAR(100) DEFAULT 'main',
+    is_local BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 
-## Backlog / Future Tasks
+-- deployment_configs
+CREATE TABLE deployment_configs (
+    id VARCHAR(36) PRIMARY KEY,
+    repo_id VARCHAR(36) NOT NULL,
+    deploy_type ENUM('ftp', 'cpanel') NOT NULL,
+    project_type ENUM('react','angular','vue','nextjs','nodejs','python','static') DEFAULT 'static',
+    host VARCHAR(255),
+    username VARCHAR(255),
+    password VARCHAR(500),
+    remote_path VARCHAR(500) DEFAULT '/',
+    use_tls BOOLEAN DEFAULT FALSE,
+    api_token VARCHAR(500),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (repo_id) REFERENCES repositories(id) ON DELETE CASCADE
+);
 
-### P1 - High Priority
-- [ ] cPanel API integration (currently placeholder)
-- [ ] SSH key authentication for Git operations
-
-### P2 - Medium Priority
-- [ ] Deployment rollback functionality
-- [ ] Duplicate deployment configuration
-- [ ] Connection history log
-- [ ] Refactor server.py into modules (routes/, models/, services/)
-
-### P3 - Low Priority
-- [ ] Webhook support for automatic deployments
-- [ ] Multi-environment deployments (dev, staging, prod)
-- [ ] Deployment scheduling
+-- operations
+CREATE TABLE operations (
+    id VARCHAR(36) PRIMARY KEY,
+    repo_id VARCHAR(36) NOT NULL,
+    operation_type ENUM('create_branch','push','merge','deploy','preview') NOT NULL,
+    branch_name VARCHAR(255),
+    status ENUM('pending','success','failed') DEFAULT 'pending',
+    message TEXT,
+    file_count INT DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (repo_id) REFERENCES repositories(id) ON DELETE CASCADE
+);
+```
 
 ## API Endpoints
 
@@ -110,56 +152,34 @@ Build a source control application with the following features:
 - `POST /api/deployment-configs` - Create config
 - `PUT /api/deployment-configs/{config_id}` - Update config
 - `DELETE /api/deployment-configs/{config_id}` - Delete config
+- `POST /api/repos/{repo_id}/preview-deploy` - **NEW** Preview deployment files
 - `POST /api/repos/{repo_id}/deploy` - Trigger deployment
 
 ### Testing
 - `POST /api/test-git-connection` - Test Git credentials
 - `POST /api/test-ftp-connection` - Test FTP credentials
+- `GET /api/health` - Health check
 
-## Database Schema
+## Backlog / Future Tasks
 
-### repositories
-```json
-{
-  "id": "uuid",
-  "name": "string",
-  "provider": "github|gitlab|bitbucket",
-  "url": "string",
-  "auth_type": "pat|ssh|oauth",
-  "auth_data": { "token": "string", "username": "string" },
-  "default_branch": "string",
-  "is_local": "boolean",
-  "created_at": "datetime"
-}
-```
+### P1 - High Priority
+- [ ] cPanel API full integration (currently placeholder)
+- [ ] SSH key authentication for Git operations
 
-### deployment_configs
-```json
-{
-  "id": "uuid",
-  "repo_id": "string",
-  "deploy_type": "ftp|cpanel",
-  "project_type": "react|angular|vue|nextjs|nodejs|python|static",
-  "config": {
-    "host": "string",
-    "username": "string",
-    "password": "string",
-    "path": "string",
-    "use_tls": "boolean"
-  },
-  "created_at": "datetime"
-}
-```
+### P2 - Medium Priority  
+- [ ] Deployment rollback functionality
+- [ ] Duplicate deployment configuration
+- [ ] Connection history log
 
-### operations
-```json
-{
-  "id": "uuid",
-  "repo_id": "string",
-  "operation_type": "create_branch|push|merge|deploy",
-  "branch_name": "string",
-  "status": "pending|success|failed",
-  "message": "string",
-  "created_at": "datetime"
-}
-```
+### P3 - Low Priority
+- [ ] Webhook support for automatic deployments
+- [ ] Multi-environment deployments (dev, staging, prod)
+- [ ] Deployment scheduling
+
+## Changelog
+
+### Feb 9, 2026 - Database Migration & Preview Feature
+- **Changed**: Migrated from MongoDB to MySQL
+- **Added**: Deployment Preview feature - see all files before deploying
+- **Fixed**: FTP nested directory creation bug
+- **Updated**: Backend now uses aiomysql for async MySQL connections
