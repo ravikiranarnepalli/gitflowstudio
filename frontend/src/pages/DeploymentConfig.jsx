@@ -17,6 +17,7 @@ const DeploymentConfig = () => {
   const [loading, setLoading] = useState(true);
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [testingFTP, setTestingFTP] = useState(false);
+  const [deployingId, setDeployingId] = useState(null);
 
   const [newConfig, setNewConfig] = useState({
     repo_id: '',
