@@ -432,13 +432,24 @@ const DeploymentConfig = () => {
                       <p className="text-sm text-muted-foreground">{config.config.host}</p>
                     </div>
                   </div>
-                  <button
-                    onClick={() => handleDeleteConfig(config.id)}
-                    data-testid={`delete-config-${config.id}`}
-                    className="text-red-500 hover:text-red-400 p-2"
-                  >
-                    <Trash2 className="w-5 h-5" strokeWidth={1.5} />
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleEditConfig(config)}
+                      data-testid={`edit-config-${config.id}`}
+                      className="text-primary hover:text-primary/80 p-2"
+                      title="Edit configuration"
+                    >
+                      <Edit className="w-5 h-5" strokeWidth={1.5} />
+                    </button>
+                    <button
+                      onClick={() => handleDeleteConfig(config.id)}
+                      data-testid={`delete-config-${config.id}`}
+                      className="text-red-500 hover:text-red-400 p-2"
+                      title="Delete configuration"
+                    >
+                      <Trash2 className="w-5 h-5" strokeWidth={1.5} />
+                    </button>
+                  </div>
                 </div>
 
                 <div className="space-y-2 mb-4">
