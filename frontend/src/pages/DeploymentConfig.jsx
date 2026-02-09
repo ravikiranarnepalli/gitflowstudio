@@ -181,7 +181,9 @@ const DeploymentConfig = () => {
               </DialogTrigger>
               <DialogContent className="bg-card border-border max-h-[90vh] overflow-y-auto">
                 <DialogHeader>
-                  <DialogTitle className="font-mono">Add Deployment Config</DialogTitle>
+                  <DialogTitle className="font-mono">
+                    {editingConfig ? 'Edit Deployment Config' : 'Add Deployment Config'}
+                  </DialogTitle>
                 </DialogHeader>
                 <div className="space-y-4">
                   <div>
