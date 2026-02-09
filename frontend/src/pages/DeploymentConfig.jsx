@@ -414,10 +414,11 @@ const DeploymentConfig = () => {
                 <button
                   onClick={() => handleDeploy(config)}
                   data-testid={`deploy-${config.id}`}
+                  disabled={deployingId === config.id}
                   className="btn-primary w-full flex items-center justify-center gap-2"
                 >
                   <Rocket className="w-4 h-4" />
-                  Deploy Now
+                  {deployingId === config.id ? 'Deploying...' : 'Deploy Now'}
                 </button>
               </div>
             ))}
