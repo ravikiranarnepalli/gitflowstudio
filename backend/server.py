@@ -618,62 +618,76 @@ async def deploy_repository(repo_id: str, request: DeployRequest):
                 try:
                     ftp.cwd(remote_path)
                 except:
-                    # Try to create the directory if it doesn't exist
                     ftp.mkd(remote_path)
                     ftp.cwd(remote_path)
                 
                 uploaded_count = 0
+                failed_files = []
                 
                 # Helper function to create remote directory
                 def ensure_remote_dir(ftp, path):
-                    try:
-                        ftp.cwd(path)
-                    except:
-                        # Directory doesn't exist, try to create it
-                        try:
-                            ftp.mkd(path)
-                            ftp.cwd(path)
-                        except:
-                            pass
+                    dirs = path.split('/')
+                    current = ''
+                    for d in dirs:
+                        if d:
+                            current += '/' + d if current else d
+                            try:
+                                ftp.cwd(current)
+                            except:
+                                try:
+                                    ftp.mkd(current)
+                                    ftp.cwd(current)
+                                except:
+                                    pass
+                    # Return to remote root
+                    ftp.cwd(remote_path)
                 
-                # Upload files with proper directory structure
-                for root, dirs, files in os.walk(repo_path):
-                    # Skip .git directory
-                    if '.git' in root:
-                        continue
-                    
-                    # Calculate relative path from repo root
-                    rel_dir = os.path.relpath(root, repo_path)
-                    
-                    # Create directory structure on remote
-                    if rel_dir != '.':
-                        remote_dir = rel_dir.replace(os.sep, '/')
-                        ensure_remote_dir(ftp, remote_dir)
-                    
-                    # Upload files
-                    for file in files:
-                        if file.startswith('.'):
-                            continue
+                # Upload each file
+                for local_path, relative_path in files_to_deploy:
+                    try:
+                        # Create directory structure if needed
+                        remote_dir = os.path.dirname(relative_path)
+                        if remote_dir:
+                            ensure_remote_dir(ftp, remote_dir)
                         
-                        local_path = os.path.join(root, file)
-                        remote_file = file
+                        # Change to the correct directory
+                        if remote_dir:
+                            ftp.cwd(remote_path + '/' + remote_dir.replace(os.sep, '/'))
+                        else:
+                            ftp.cwd(remote_path)
                         
-                        try:
-                            with open(local_path, 'rb') as f:
-                                ftp.storbinary(f'STOR {remote_file}', f)
-                            uploaded_count += 1
-                        except Exception as file_error:
-                            logger.warning(f"Failed to upload {file}: {str(file_error)}")
+                        # Upload file
+                        remote_file = os.path.basename(relative_path)
+                        with open(local_path, 'rb') as f:
+                            ftp.storbinary(f'STOR {remote_file}', f)
+                        uploaded_count += 1
+                        
+                        # Return to root
+                        ftp.cwd(remote_path)
+                        
+                    except Exception as file_error:
+                        failed_files.append(relative_path)
+                        logger.warning(f"Failed to upload {relative_path}: {str(file_error)}")
                 
                 ftp.quit()
                 
-                success_msg = f"Deployed {uploaded_count} files successfully to FTP server"
+                # Prepare success message
+                success_msg = f"Deployed {uploaded_count}/{len(files_to_deploy)} files successfully"
+                if failed_files:
+                    success_msg += f" ({len(failed_files)} files failed)"
+                
                 await update_operation_status(op_obj.id, "success", success_msg)
                 
                 return {
                     "success": True,
                     "message": success_msg,
-                    "operation_id": op_obj.id
+                    "operation_id": op_obj.id,
+                    "details": {
+                        "uploaded": uploaded_count,
+                        "total": len(files_to_deploy),
+                        "failed": len(failed_files),
+                        "project_type": project_type
+                    }
                 }
                 
             except Exception as ftp_error:
