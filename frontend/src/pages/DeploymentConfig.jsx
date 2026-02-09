@@ -55,9 +55,17 @@ const DeploymentConfig = () => {
 
   const handleAddConfig = async () => {
     try {
-      await axios.post(`${API}/deployment-configs`, newConfig);
-      toast.success('Deployment config added successfully');
+      if (editingConfig) {
+        // Update existing config
+        await axios.put(`${API}/deployment-configs/${editingConfig.id}`, newConfig);
+        toast.success('Deployment config updated successfully');
+      } else {
+        // Create new config
+        await axios.post(`${API}/deployment-configs`, newConfig);
+        toast.success('Deployment config added successfully');
+      }
       setShowAddDialog(false);
+      setEditingConfig(null);
       fetchData();
       setNewConfig({
         repo_id: '',
@@ -72,9 +80,20 @@ const DeploymentConfig = () => {
         }
       });
     } catch (error) {
-      console.error('Error adding config:', error);
-      toast.error(error.response?.data?.detail || 'Failed to add deployment config');
+      console.error('Error saving config:', error);
+      toast.error(error.response?.data?.detail || 'Failed to save deployment config');
     }
+  };
+
+  const handleEditConfig = (config) => {
+    setEditingConfig(config);
+    setNewConfig({
+      repo_id: config.repo_id,
+      deploy_type: config.deploy_type,
+      project_type: config.project_type || 'static',
+      config: config.config
+    });
+    setShowAddDialog(true);
   };
 
   const handleTestFTP = async () => {
