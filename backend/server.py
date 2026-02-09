@@ -550,21 +550,23 @@ async def deploy_repository(repo_id: str, request: DeployRequest):
                 raise ValueError(error_msg)
             
         elif deploy_type == 'cpanel':
-            # cPanel deployment via API (simplified)
+            # cPanel deployment via API (simplified mock for MVP)
             host = config.get('host')
             username = config.get('username')
             api_token = config.get('api_token')
             
-            # This is a simplified mock - actual cPanel API integration would be more complex
-            message = f"cPanel deployment initiated for {host}"
+            # This is a placeholder - actual cPanel API would require more complex integration
+            success_msg = f"cPanel deployment initiated for {host} (Note: Full cPanel integration coming soon)"
+            await update_operation_status(op_obj.id, "success", success_msg)
+            
+            return {
+                "success": True,
+                "message": success_msg,
+                "operation_id": op_obj.id
+            }
         
-        await update_operation_status(op_obj.id, "success", f"Deployed successfully to {deploy_type}")
-        
-        return {
-            "success": True,
-            "message": f"Deployed successfully to {deploy_type}",
-            "operation_id": op_obj.id
-        }
+        else:
+            raise ValueError(f"Unknown deployment type: {deploy_type}")
     except ValueError as e:
         await update_operation_status(op_obj.id, "failed", str(e))
         raise HTTPException(status_code=400, detail=str(e))
