@@ -278,13 +278,24 @@ const Repositories = () => {
                     />
                     <Label htmlFor="is-local">This is the local /app codebase</Label>
                   </div>
-                  <Button
-                    data-testid="save-repository-btn"
-                    onClick={handleAddRepo}
-                    className="btn-primary w-full"
-                  >
-                    Add Repository
-                  </Button>
+                  <div className="flex gap-2">
+                    <Button
+                      data-testid="test-connection-btn"
+                      onClick={handleTestConnection}
+                      disabled={testingConnection || !newRepo.url}
+                      className="btn-secondary flex-1"
+                      type="button"
+                    >
+                      {testingConnection ? 'Testing...' : 'Test Connection'}
+                    </Button>
+                    <Button
+                      data-testid="save-repository-btn"
+                      onClick={handleAddRepo}
+                      className="btn-primary flex-1"
+                    >
+                      Add Repository
+                    </Button>
+                  </div>
                 </div>
               </DialogContent>
             </Dialog>
