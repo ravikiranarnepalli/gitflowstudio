@@ -195,6 +195,29 @@ const DeploymentConfig = () => {
                       </SelectContent>
                     </Select>
                   </div>
+                  <div>
+                    <Label>Project Type</Label>
+                    <Select
+                      value={newConfig.project_type}
+                      onValueChange={(val) => setNewConfig({ ...newConfig, project_type: val })}
+                    >
+                      <SelectTrigger data-testid="project-type-select" className="mt-1">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="react">React (build → deploy build/)</SelectItem>
+                        <SelectItem value="angular">Angular (build → deploy dist/)</SelectItem>
+                        <SelectItem value="vue">Vue.js (build → deploy dist/)</SelectItem>
+                        <SelectItem value="nextjs">Next.js (build → deploy .next/)</SelectItem>
+                        <SelectItem value="nodejs">Node.js (exclude node_modules)</SelectItem>
+                        <SelectItem value="python">Python (exclude venv)</SelectItem>
+                        <SelectItem value="static">Static HTML/CSS/JS</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Frontend projects will be built automatically before deployment
+                    </p>
+                  </div>
 
                   {newConfig.deploy_type === 'ftp' && (
                     <>
