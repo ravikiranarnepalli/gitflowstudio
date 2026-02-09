@@ -385,7 +385,7 @@ const DeploymentConfig = () => {
                       onClick={handleAddConfig}
                       className="btn-primary w-full"
                     >
-                      Save Configuration
+                      {editingConfig ? 'Update Configuration' : 'Save Configuration'}
                     </Button>
                   )}
                 </div>
