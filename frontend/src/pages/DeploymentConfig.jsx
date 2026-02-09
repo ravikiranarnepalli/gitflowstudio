@@ -391,7 +391,7 @@ const DeploymentConfig = () => {
                         onClick={handleAddConfig}
                         className="btn-primary flex-1"
                       >
-                        Save Configuration
+                        {editingConfig ? 'Update Configuration' : 'Save Configuration'}
                       </Button>
                     </div>
                   )}
