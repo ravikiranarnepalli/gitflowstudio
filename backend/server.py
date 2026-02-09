@@ -473,25 +473,81 @@ async def deploy_repository(repo_id: str, request: DeployRequest):
             remote_path = config.get('path', '/')
             use_tls = config.get('use_tls', False)
             
-            if use_tls:
-                ftp = FTP_TLS(host)
-            else:
-                ftp = FTP(host)
-            
-            ftp.login(username, password)
-            ftp.cwd(remote_path)
-            
-            # Upload files (simplified - only uploads specific files for MVP)
-            for root, dirs, files in os.walk(repo_path):
-                for file in files:
-                    if not file.startswith('.git'):
-                        local_path = os.path.join(root, file)
-                        relative_path = os.path.relpath(local_path, repo_path)
+            try:
+                if use_tls:
+                    ftp = FTP_TLS(host, timeout=30)
+                else:
+                    ftp = FTP(host, timeout=30)
+                
+                ftp.login(username, password)
+                
+                # Change to remote directory
+                try:
+                    ftp.cwd(remote_path)
+                except:
+                    # Try to create the directory if it doesn't exist
+                    ftp.mkd(remote_path)
+                    ftp.cwd(remote_path)
+                
+                uploaded_count = 0
+                
+                # Helper function to create remote directory
+                def ensure_remote_dir(ftp, path):
+                    try:
+                        ftp.cwd(path)
+                    except:
+                        # Directory doesn't exist, try to create it
+                        try:
+                            ftp.mkd(path)
+                            ftp.cwd(path)
+                        except:
+                            pass
+                
+                # Upload files with proper directory structure
+                for root, dirs, files in os.walk(repo_path):
+                    # Skip .git directory
+                    if '.git' in root:
+                        continue
+                    
+                    # Calculate relative path from repo root
+                    rel_dir = os.path.relpath(root, repo_path)
+                    
+                    # Create directory structure on remote
+                    if rel_dir != '.':
+                        remote_dir = rel_dir.replace(os.sep, '/')
+                        ensure_remote_dir(ftp, remote_dir)
+                    
+                    # Upload files
+                    for file in files:
+                        if file.startswith('.'):
+                            continue
                         
-                        with open(local_path, 'rb') as f:
-                            ftp.storbinary(f'STOR {relative_path}', f)
-            
-            ftp.quit()
+                        local_path = os.path.join(root, file)
+                        remote_file = file
+                        
+                        try:
+                            with open(local_path, 'rb') as f:
+                                ftp.storbinary(f'STOR {remote_file}', f)
+                            uploaded_count += 1
+                        except Exception as file_error:
+                            logger.warning(f"Failed to upload {file}: {str(file_error)}")
+                
+                ftp.quit()
+                
+                success_msg = f"Deployed {uploaded_count} files successfully to FTP server"
+                await update_operation_status(op_obj.id, "success", success_msg)
+                
+                return {
+                    "success": True,
+                    "message": success_msg,
+                    "operation_id": op_obj.id
+                }
+                
+            except Exception as ftp_error:
+                error_msg = f"FTP deployment failed: {str(ftp_error)}"
+                logger.error(error_msg)
+                await update_operation_status(op_obj.id, "failed", error_msg)
+                raise ValueError(error_msg)
             
         elif deploy_type == 'cpanel':
             # cPanel deployment via API (simplified)
