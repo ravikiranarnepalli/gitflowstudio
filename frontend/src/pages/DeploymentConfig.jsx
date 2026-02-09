@@ -425,6 +425,10 @@ const DeploymentConfig = () => {
                     <span className="status-badge info">{config.deploy_type.toUpperCase()}</span>
                   </div>
                   <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">Project:</span>
+                    <span className="status-badge success">{(config.project_type || 'static').toUpperCase()}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm">
                     <span className="text-muted-foreground">Username:</span>
                     <span className="font-mono">{config.config.username}</span>
                   </div>
